@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    通信シミュレーター用の部品（フレーム確定・解析・受信 Worker・模擬機器）。
+    Eiii.CommSim と Eiii.DemoConsole、およびテストから参照する。ライブラリ本体（src/Eiii）とは別で、通信固有の処理はここに置く。
+    名前空間は移動前と同じ Eiii.CommSim のまま（移動のみのため）。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Eiii.CommSim</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Eiii\Eiii.csproj" />
+  </ItemGroup>
+
+</Project>

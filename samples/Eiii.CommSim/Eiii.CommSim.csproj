@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Eiii\Eiii.csproj" />
+    <ProjectReference Include="..\Eiii.Comm\Eiii.Comm.csproj" />
   </ItemGroup>
 
 </Project>

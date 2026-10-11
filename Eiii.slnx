@@ -3,6 +3,7 @@
     <Project Path="legacy/Eiii.Legacy.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Eiii.Comm/Eiii.Comm.csproj" />
     <Project Path="samples/Eiii.CommSim/Eiii.CommSim.csproj" />
     <Project Path="samples/Eiii.Sample/Eiii.Sample.csproj" />
   </Folder>
