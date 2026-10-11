@@ -5,6 +5,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/Eiii.Comm/Eiii.Comm.csproj" />
     <Project Path="samples/Eiii.CommSim/Eiii.CommSim.csproj" />
+    <Project Path="samples/Eiii.DemoConsole/Eiii.DemoConsole.csproj" />
     <Project Path="samples/Eiii.Sample/Eiii.Sample.csproj" />
   </Folder>
   <Folder Name="/src/">
@@ -12,6 +13,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Eiii.CommSim.Tests/Eiii.CommSim.Tests.csproj" />
+    <Project Path="tests/Eiii.DemoConsole.Tests/Eiii.DemoConsole.Tests.csproj" />
     <Project Path="tests/Eiii.Legacy.Tests/Eiii.Legacy.Tests.csproj" />
     <Project Path="tests/Eiii.Tests/Eiii.Tests.csproj" />
   </Folder>
