@@ -40,7 +40,7 @@ namespace EventImplementedInduceInterface
 		/// <summary>
 		/// イベント関数 virtual
 		/// </summary>
-		internal virtual void eventFunc<T>(object sender, EiiiEventArgs<T> e)
+		internal virtual void eventFunc(object sender, EiiiEventArgs<T> e)
 		{
 			// override してここに目的の処理を記述
 		}

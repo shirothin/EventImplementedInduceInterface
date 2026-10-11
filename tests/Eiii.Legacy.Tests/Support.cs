@@ -75,10 +75,10 @@ internal sealed class EventProbe : EiiiTask<MyItem>
     public MyItem Received { get; private set; }
     public int ThreadId { get; private set; }
 
-    internal override void eventFunc<T>(object sender, EiiiEventArgs<T> e)
+    internal override void eventFunc(object sender, EiiiEventArgs<MyItem> e)
     {
         Sender = sender;
         ThreadId = Environment.CurrentManagedThreadId;
-        Received = e.Value as MyItem;   // メソッド側の T が MyItem だと分からないため、キャストが必要
+        Received = e.Value;   // Step 1: クラスの T（= MyItem）がそのまま使えるため、キャスト不要
     }
 }

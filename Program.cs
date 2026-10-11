@@ -40,12 +40,12 @@ namespace EventImplementedInduceInterface
 		{
 		}
 
-		internal override void eventFunc<T>(object sender, EiiiEventArgs<T> e)
+		internal override void eventFunc(object sender, EiiiEventArgs<MyItem> e)
 		{
 			base.eventFunc(sender, e);
 
 			// override
-			var itm = e.Value as MyItem;
+			var itm = e.Value;
 			var bak = Console.ForegroundColor;
 			var color = bak;
 			switch (itm.tskctl)
