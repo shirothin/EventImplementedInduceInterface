@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
-using EventImplementedInduceInterface;
+using Eiii;
 
 namespace Eiii.Tests;
 
 /// <summary>要求 r を処理すると r を記録し、r * 10 を出力するテスト用タスク。ハンドラーの同時実行数も記録する。</summary>
 internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueTask>? onRequest = null, TaskToCallback<int>? callback = null)
-    : EiiiTask<int, int>(capacity, callback)
+    : EiiiWorker<int, int>(capacity, callback)
 {
     private int concurrent;
     private int maxConcurrent;
@@ -14,7 +14,7 @@ internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueT
     public int MaxConcurrent => Volatile.Read(ref maxConcurrent);
     public int InputCompletedCount;
 
-    protected override async ValueTask OnRequestAsync(int request, CancellationToken cancellationToken)
+    protected override async ValueTask ProcessAsync(int request, CancellationToken cancellationToken)
     {
         var now = Interlocked.Increment(ref concurrent);
         int seen;
@@ -42,9 +42,9 @@ internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueT
 internal static class RunInspector
 {
     private static readonly System.Reflection.FieldInfo CurrentField =
-        typeof(EiiiTask).GetField("current", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        typeof(EiiiWorker).GetField("current", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
 
-    public static object CurrentRun(EiiiTask task) => CurrentField.GetValue(task)!;
+    public static object CurrentRun(EiiiWorker task) => CurrentField.GetValue(task)!;
 
     public static bool IsDisposed(object run)
         => (bool)run.GetType().GetField("disposed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(run)!;

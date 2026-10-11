@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>
 /// 通信機器の模擬。チャンクを Receiver の入力へ WriteAsync で送る。

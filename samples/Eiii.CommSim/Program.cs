@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using static EventImplementedInduceInterface.CommSim.DeviceSimulator;
+using static Eiii.CommSim.DeviceSimulator;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>
 /// 通信シミュレーター。
@@ -84,7 +84,7 @@ internal static class Program
     {
         var time = TimeProvider.System;
         var results = new ConcurrentQueue<OsdResponse>();
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var receiver = registry.Add("osd-receiver", new TimedReceiverTask(256, new TimeoutFramer(options),
             new TaskToCallback<TimedFrame>(frame => Log.Write("receiver",
                 $"フレーム確定 [{frame.End}] 長さ={frame.Text.Length}" +
@@ -172,11 +172,11 @@ internal static class Program
                           $"[{string.Join(", ", readings.Select(Describe))}]、停止で失われた={4 - readings.Count} 件");
     }
 
-    private static (TaskDbContext Registry, ReceiverTask Receiver, ParserTask Parser, ConcurrentQueue<Reading> Readings) Build(
+    private static (EiiiWorkerRegistry Registry, ReceiverTask Receiver, ParserTask Parser, ConcurrentQueue<Reading> Readings) Build(
         int receiverCapacity, int parserCapacity, TimeSpan parseTime)
     {
         var readings = new ConcurrentQueue<Reading>();
-        var registry = new TaskDbContext();   // 登録順 = 上流から下流（CompleteAllAsync の適用条件）
+        var registry = new EiiiWorkerRegistry();   // 登録順 = 上流から下流（CompleteAllAsync の適用条件）
 
         var receiver = registry.Add("receiver", new ReceiverTask(receiverCapacity, new DelimiterFramer(),
             new TaskToCallback<Frame>(frame => Log.Write("receiver",

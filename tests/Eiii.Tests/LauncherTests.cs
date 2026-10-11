@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
-using EventImplementedInduceInterface;
+using Eiii;
 
 namespace Eiii.Tests;
 
@@ -13,16 +13,16 @@ public class LauncherTests
         var results = new ConcurrentQueue<int>();
         var task = new TestTask(8, callback: new TaskToCallback<int>(results.Enqueue));   // 明示的なデリゲート生成
         var launcher = new EiiiLauncher<int>();
-        task.Subscribe(launcher);
+        task.Attach(launcher);
 
         // 1) イベント発行の時点では Channel に積まれるだけで、処理もコールバックもまだ起きない
-        for (int i = 1; i <= 3; i++) Assert.True(launcher.Trigger(this, i));
+        for (int i = 1; i <= 3; i++) Assert.True(launcher.Request(this, i));
         Assert.Equal(3, task.PendingCount);
         Assert.Empty(results);
 
         // 2) ワーカーを起動すると順に処理され、出力がコールバックに届く
         task.Start();
-        Assert.True(launcher.Trigger(this, 4));
+        Assert.True(launcher.Request(this, 4));
         await Wait.UntilAsync(() => results.Count == 4);
 
         Assert.Equal([10, 20, 30, 40], results);
@@ -34,44 +34,44 @@ public class LauncherTests
     {
         var task = new TestTask(4);
         var launcher = new EiiiLauncher<int>();
-        task.Subscribe(launcher);
+        task.Attach(launcher);
         object? observed = null;
-        launcher.Raise += (sender, _) => observed = sender;   // 利用者側の観察用購読者
+        launcher.Requested += (sender, _) => observed = sender;   // 利用者側の観察用購読者
         var caller = new object();
 
-        launcher.Trigger(caller, 1);
+        launcher.Request(caller, 1);
 
         Assert.Same(caller, observed);
     }
 
     [Fact]
-    public void 購読者がいなければTriggerはfalseを返す()
+    public void 購読者がいなければRequestはfalseを返す()
     {
-        Assert.False(new EiiiLauncher<int>().Trigger(new object(), 1));
+        Assert.False(new EiiiLauncher<int>().Request(new object(), 1));
     }
 
     [Fact]
-    public void 満杯ではTriggerはfalseを返し受理済みのデータは残る()
+    public void 満杯ではRequestはfalseを返し受理済みのデータは残る()
     {
         var task = new TestTask(1);
         var launcher = new EiiiLauncher<int>();
-        task.Subscribe(launcher);
+        task.Attach(launcher);
 
-        Assert.True(launcher.Trigger(this, 1));
-        Assert.False(launcher.Trigger(this, 2));   // 満杯: 待たずに false（呼び出し元が再送を判断する）
+        Assert.True(launcher.Request(this, 1));
+        Assert.False(launcher.Request(this, 2));   // 満杯: 待たずに false（呼び出し元が再送を判断する）
 
         Assert.Equal(1, task.PendingCount);        // 受理済みの 1 は捨てられていない
     }
 
     [Fact]
-    public void 入力完了後のTriggerはfalseを返す()
+    public void 入力完了後のRequestはfalseを返す()
     {
         var task = new TestTask(4);
         var launcher = new EiiiLauncher<int>();
-        task.Subscribe(launcher);
+        task.Attach(launcher);
         task.CompleteInput();
 
-        Assert.False(launcher.Trigger(this, 1));
+        Assert.False(launcher.Request(this, 1));
     }
 
     [Fact]
@@ -79,24 +79,24 @@ public class LauncherTests
     {
         var task = new TestTask(4);
         var launcher = new EiiiLauncher<int>();
-        task.Subscribe(launcher);
-        task.Subscribe(launcher);
+        task.Attach(launcher);
+        task.Attach(launcher);
 
-        Assert.True(launcher.Trigger(this, 1));
+        Assert.True(launcher.Request(this, 1));
 
         Assert.Equal(1, task.PendingCount);
     }
 
     [Fact]
-    public void 購読を解除するとTriggerはfalseで投入されない()
+    public void 購読を解除するとRequestはfalseで投入されない()
     {
         var task = new TestTask(4);
         var launcher = new EiiiLauncher<int>();
-        task.Subscribe(launcher);
+        task.Attach(launcher);
 
-        task.Unsubscribe(launcher);
+        task.Detach(launcher);
 
-        Assert.False(launcher.Trigger(this, 1));
+        Assert.False(launcher.Request(this, 1));
         Assert.Equal(0, task.PendingCount);
     }
 

@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
-using EventImplementedInduceInterface;
-using EventImplementedInduceInterface.CommSim;
+using Eiii;
+using Eiii.CommSim;
 
 namespace Eiii.CommSim.Tests;
 
@@ -30,7 +30,7 @@ public class TimedPipelineTests
             ticks = TickSource.RunAsync(Receiver.Input, TimeSpan.FromMilliseconds(25), Time, ticking.Token);
         }
 
-        public TaskDbContext Registry { get; } = new();
+        public EiiiWorkerRegistry Registry { get; } = new();
         public TimedReceiverTask Receiver { get; }
         public OsdParserTask Parser { get; }
         public ConcurrentQueue<OsdResponse> Results { get; } = new();

@@ -2,7 +2,7 @@ using System.Threading.Channels;
 
 namespace Eiii.Tests;
 
-public class EiiiTaskStateTests
+public class EiiiWorkerStateTests
 {
     [Fact]
     public void 起動前はExecutionがnullでIsRunningはfalse()
@@ -122,7 +122,7 @@ public class EiiiTaskStateTests
     }
 }
 
-public class EiiiTaskBackpressureTests
+public class EiiiWorkerBackpressureTests
 {
     [Fact]
     public async Task 満杯時にTryWriteはfalseを返しWriteAsyncは空きを待つ()
@@ -184,7 +184,7 @@ public class EiiiTaskBackpressureTests
     }
 }
 
-public class EiiiTaskConcurrencyTests(Xunit.Abstractions.ITestOutputHelper output)
+public class EiiiWorkerConcurrencyTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public async Task Startを二重に呼んでも同じ実行のまま()
@@ -366,7 +366,7 @@ public class EiiiTaskConcurrencyTests(Xunit.Abstractions.ITestOutputHelper outpu
     }
 }
 
-public class EiiiTaskCancellationSourceTests
+public class EiiiWorkerCancellationSourceTests
 {
     [Fact]
     public async Task 正常終了するとその実行のCTSが破棄される()
@@ -470,7 +470,7 @@ public class EiiiTaskCancellationSourceTests
     }
 }
 
-public class EiiiTaskRestartStopTests
+public class EiiiWorkerRestartStopTests
 {
     [Fact]
     public async Task RestartAsyncとStopAsyncを同時に呼んでも多重起動や破棄済みCTSの例外がなく停止処理が完了する()

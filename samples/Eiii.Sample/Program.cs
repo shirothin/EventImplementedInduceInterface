@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 
-namespace EventImplementedInduceInterface.Sample;
+namespace Eiii.Sample;
 
 /// <summary>
 /// (目的の)型 — 原型 MyItem。
@@ -11,12 +11,12 @@ internal sealed record MyItem(int Number, string TextMessage);
 
 /// <summary>
 /// ワーカー — 原型 MyTask（EiiiTask&lt;MyItem&gt;）。要求 MyItem を処理し、結果の文字列を出力する。
-/// 原型の eventFunc は呼び出し元のスレッドで動いたが、OnRequestAsync はワーカーのスレッドで 1 件ずつ動く。
+/// 原型の eventFunc は呼び出し元のスレッドで動いたが、ProcessAsync はワーカーのスレッドで 1 件ずつ動く。
 /// </summary>
 internal sealed class MyTask(int capacity, TimeSpan processingTime, TaskToCallback<string> callback)
-    : EiiiTask<MyItem, string>(capacity, callback)
+    : EiiiWorker<MyItem, string>(capacity, callback)
 {
-    protected override async ValueTask OnRequestAsync(MyItem request, CancellationToken cancellationToken)
+    protected override async ValueTask ProcessAsync(MyItem request, CancellationToken cancellationToken)
     {
         Log.Write("worker", $"処理開始 Number={request.Number}");
         try
@@ -38,11 +38,11 @@ internal sealed class MyTask(int capacity, TimeSpan processingTime, TaskToCallba
 /// 標準入力がリダイレクトされているときは、文字（' ', 'b', 'r', 'q'）でキー操作の代わりにする。
 /// </summary>
 /// <remarks>
-/// <para>同期と非同期の違い: イベントハンドラー（Raise の購読者）は Trigger を呼んだスレッドで、Trigger が戻る前に同期実行される。
-/// ワーカー（OnRequestAsync）は Channel から要求を読み出して、呼び出し元とは独立に非同期で処理する。</para>
+/// <para>同期と非同期の違い: イベントハンドラー（Requested の購読者）は Request を呼んだスレッドで、Request が戻る前に同期実行される。
+/// ワーカー（ProcessAsync）は Channel から要求を読み出して、呼び出し元とは独立に非同期で処理する。</para>
 /// <para>非同期は「別スレッド」と同じ意味ではない: async/await は待機中にスレッドを占有しない仕組みであり、
 /// 続きがどのスレッドで動くかは実行環境が決める。このサンプルでワーカーがスレッドプールで動くのは、
-/// EiiiTask が Task.Run で起動しているためで、非同期処理が必ず別スレッドで動くという意味ではない。</para>
+/// EiiiWorker が Task.Run で起動しているためで、非同期処理が必ず別スレッドで動くという意味ではない。</para>
 /// <para>Main を同期メソッドにした理由: 今回の実験で動作を観察しやすくするため（原型と同じ形）。
 /// async Main では await の後の続きがスレッドプールで再開され、入力ループとワーカーのスレッド ID が混ざって見分けにくい。</para>
 /// <para>GetAwaiter().GetResult() について: 同期 Main から非同期 API の完了を待つために、この実験に限って使う。
@@ -51,12 +51,12 @@ internal sealed class MyTask(int capacity, TimeSpan processingTime, TaskToCallba
 /// </remarks>
 internal static class Test
 {
-    private const string Caller = "Test.Main";   // Trigger の sender（要求の呼び出し元）
+    private const string Caller = "Test.Main";   // Request の sender（要求の呼び出し元）
 
     private static void Main()
     {
         // Registry — 原型 TaskDbContext<MyItem>。入出力型の異なるワーカーも登録できる
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
 
         // Callback — 原型 Cb[0]。型付きの delegate を明示的に生成する
         int callbacks = 0;
@@ -85,11 +85,11 @@ internal static class Test
 
         // Launcher — 原型はキー入力のたびに new EiiiLauncher で SetSubscribe していた。ここでは 1 つを常駐させる
         var launcher = new EiiiLauncher<MyItem>();
-        registry.Get<MyTask>("aTsk").Subscribe(launcher);   // 原型 GetTaskByName("aTsk")。ワーカーのハンドラーが TryWrite して Accepted を書き戻す
+        registry.Get<MyTask>("aTsk").Attach(launcher);   // 原型 GetTaskByName("aTsk")。ワーカーのハンドラーが TryWrite して Accepted を書き戻す
 
         // 観察用の購読者（Accepted は書き込まない）。マルチキャストなので登録順に、ワーカーのハンドラーの後で呼ばれる
-        launcher.Raise += (sender, e) =>
-            Log.Write("event", $"Raise を受信 sender={sender} Number={e.Value.Number} Accepted={e.Accepted}（呼び出し元スレッドで同期実行）");
+        launcher.Requested += (sender, e) =>
+            Log.Write("event", $"Requested を受信 sender={sender} Number={e.Value.Number} Accepted={e.Accepted}（呼び出し元スレッドで同期実行）");
 
         registry.StartAll();
         Log.Write("main", "Space: 要求1件 / B: 要求6件 / R: 再起動 / Esc: 正常終了");
@@ -127,9 +127,9 @@ internal static class Test
             for (int i = 0; i < count; i++)
             {
                 var item = new MyItem(++number, $"Item{number}");
-                var ok = launcher.Trigger(Caller, item);   // 同期: Raise イベント → ハンドラーが Channel へ TryWrite
+                var ok = launcher.Request(Caller, item);   // 同期: Requested イベント → ハンドラーが Channel へ TryWrite
                 if (ok) accepted++; else rejected++;
-                Log.Write("main", $"Trigger(Number={item.Number}) → {(ok ? "受理" : "拒否（満杯）")} pending={task.PendingCount}");
+                Log.Write("main", $"Request(Number={item.Number}) → {(ok ? "受理" : "拒否（満杯）")} pending={task.PendingCount}");
             }
         }
     }

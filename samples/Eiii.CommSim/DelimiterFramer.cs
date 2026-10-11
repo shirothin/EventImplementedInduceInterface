@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>受信データから確定したフレーム。<see cref="IsComplete"/> が false なのは、区切り文字なしで入力が終わった末尾だけ。</summary>
 /// <param name="Text">区切り文字を除いたフレームの内容。</param>

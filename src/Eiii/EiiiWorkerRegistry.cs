@@ -1,8 +1,8 @@
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
-/// 入出力型の異なるワーカーを名前で一元管理する（原型 TaskDbContext&lt;T&gt;。命名変更は Phase 2 完了後に判断）。
-/// ワーカーは型に依存しない基底 <see cref="EiiiTask"/> として保持し、取り出すときに具体的な型へ戻す。
+/// 入出力型の異なるワーカーを名前で一元管理する（原型 TaskDbContext&lt;T&gt; に相当。Phase 2 完了時に TaskDbContext から改名）。
+/// ワーカーは型に依存しない基底 <see cref="EiiiWorker"/> として保持し、取り出すときに具体的な型へ戻す。
 /// </summary>
 /// <remarks>
 /// <para>責務: 入出力型の異なるワーカーの登録、名前による検索、基本的な寿命管理だけを担う。
@@ -15,12 +15,12 @@ namespace EventImplementedInduceInterface;
 /// <para>制約: Registry は LinkTo による接続を知らない。下流を上流より先に登録すると、<see cref="CompleteAllAsync"/> は
 /// 下流の入力を先に閉じるため、その後に上流が出力すると ChannelClosedException で上流が Faulted になる。
 /// 分岐・合流・循環を含む構成では、アプリケーションが各ワーカーの CompleteInput / StopAsync を適切な順序で呼ぶこと。</para>
-/// <para>結果の観測: 一括操作はワーカーの例外を再スローしない。各ワーカーの結果は <see cref="EiiiTask.Execution"/> で観測する。</para>
+/// <para>結果の観測: 一括操作はワーカーの例外を再スローしない。各ワーカーの結果は <see cref="EiiiWorker.Execution"/> で観測する。</para>
 /// </remarks>
-public sealed class TaskDbContext
+public sealed class EiiiWorkerRegistry
 {
     private readonly Lock gate = new();
-    private readonly OrderedDictionary<string, EiiiTask> workers = new(StringComparer.Ordinal);
+    private readonly OrderedDictionary<string, EiiiWorker> workers = new(StringComparer.Ordinal);
 
     /// <summary>ワーカーを名前で登録する。</summary>
     /// <typeparam name="TWorker">ワーカーの具体的な型。戻り値もこの型のまま返す。</typeparam>
@@ -28,7 +28,7 @@ public sealed class TaskDbContext
     /// <param name="worker">登録するワーカー。</param>
     /// <returns>登録した <paramref name="worker"/>。</returns>
     /// <exception cref="ArgumentException">同じ名前が登録済み。既存の登録は変わらない。</exception>
-    public TWorker Add<TWorker>(string name, TWorker worker) where TWorker : EiiiTask
+    public TWorker Add<TWorker>(string name, TWorker worker) where TWorker : EiiiWorker
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(worker);
@@ -40,12 +40,12 @@ public sealed class TaskDbContext
     }
 
     /// <summary>名前でワーカーを取り出す（原型 GetTaskByName）。</summary>
-    /// <typeparam name="TWorker">取り出す型。基底の <see cref="EiiiTask"/> も指定できる。</typeparam>
+    /// <typeparam name="TWorker">取り出す型。基底の <see cref="EiiiWorker"/> も指定できる。</typeparam>
     /// <param name="name">登録名。</param>
     /// <returns>登録されているワーカー。</returns>
     /// <exception cref="KeyNotFoundException">未登録の名前。</exception>
     /// <exception cref="InvalidCastException">登録されているワーカーが <typeparamref name="TWorker"/> ではない。</exception>
-    public TWorker Get<TWorker>(string name) where TWorker : EiiiTask
+    public TWorker Get<TWorker>(string name) where TWorker : EiiiWorker
     {
         lock (gate) return (TWorker)workers[name];
     }
@@ -84,7 +84,7 @@ public sealed class TaskDbContext
         }
     }
 
-    private EiiiTask[] Snapshot()
+    private EiiiWorker[] Snapshot()
     {
         lock (gate) return [.. workers.Values];
     }

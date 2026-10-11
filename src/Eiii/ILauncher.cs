@@ -1,4 +1,4 @@
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
 /// 原型の独自デリゲート（原型 ILauncher.cs:3）。比較学習のため、標準の <see cref="EventHandler{TEventArgs}"/> ではなくこれを使う。
@@ -9,7 +9,7 @@ namespace EventImplementedInduceInterface;
 /// <param name="sender">イベントの送信元。</param>
 /// <param name="e">イベント情報。</param>
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1711:Identifiers should not have incorrect suffix",
-    Justification = "原型の独自デリゲートを比較学習のため維持する（命名変更は Phase 2 完了後に判断）。")]
+    Justification = "原型の独自デリゲートを比較学習のため維持する（Phase 2 完了時の命名変更でも維持すると決定）。")]
 public delegate void EventHandler<TSender, TEventArgs>(TSender sender, TEventArgs e);
 
 /// <summary>型付き要求を発行する入口（原型 ILauncher&lt;T&gt;）。</summary>
@@ -18,11 +18,11 @@ public delegate void EventHandler<TSender, TEventArgs>(TSender sender, TEventArg
 public interface ILauncher<T>
 {
     /// <summary>要求が発行されたことの通知。sender は要求の呼び出し元。</summary>
-    event EventHandler<object, EiiiEventArgs<T>>? Raise;
+    event EventHandler<object, EiiiEventArgs<T>>? Requested;
 
     /// <summary>要求を発行する（原型の Trigger プロパティに相当）。</summary>
     /// <param name="sender">要求の呼び出し元。</param>
     /// <param name="value">要求の値。</param>
     /// <returns>購読者が受理したら true。購読者がいない、または満杯・入力完了で受理されなければ false。</returns>
-    bool Trigger(object sender, T value);
+    bool Request(object sender, T value);
 }

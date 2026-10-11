@@ -1,4 +1,4 @@
-using EventImplementedInduceInterface.CommSim;
+using Eiii.CommSim;
 
 namespace Eiii.CommSim.Tests;
 

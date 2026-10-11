@@ -1,4 +1,4 @@
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
 /// 発行された要求の値と、受理結果の書き戻し欄（原型 EiiiEventArgs&lt;T&gt;）。

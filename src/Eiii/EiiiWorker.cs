@@ -1,4 +1,4 @@
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
 /// 入出力型に依存しないワーカーの寿命制御（原型 <c>EiiiTask&lt;T&gt;</c> の
@@ -12,7 +12,7 @@ namespace EventImplementedInduceInterface;
 /// <para>禁止事項: ワーカー内部（要求の処理中）から自身の <see cref="StopAsync"/> / <see cref="RestartAsync"/> を
 /// await してはならない。自身の終了を自身で待つためデッドロックする（検出はしない）。</para>
 /// </remarks>
-public abstract class EiiiTask
+public abstract class EiiiWorker
 {
     private readonly Lock gate = new();
     private Run? current;

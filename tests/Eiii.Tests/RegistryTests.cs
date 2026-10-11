@@ -1,12 +1,12 @@
 using System.Collections.Concurrent;
-using EventImplementedInduceInterface;
+using Eiii;
 
 namespace Eiii.Tests;
 
 /// <summary>string を受けて長さ（int）を出力する。"boom" で例外を投げる。</summary>
-internal sealed class LengthTask(int capacity) : EiiiTask<string, int>(capacity)
+internal sealed class LengthTask(int capacity) : EiiiWorker<string, int>(capacity)
 {
-    protected override ValueTask OnRequestAsync(string request, CancellationToken cancellationToken)
+    protected override ValueTask ProcessAsync(string request, CancellationToken cancellationToken)
         => request == "boom" ? throw new InvalidOperationException("boom") : EmitAsync(request.Length, cancellationToken);
 }
 
@@ -16,22 +16,22 @@ public class RegistryTests
     [Fact]
     public void 入出力型の異なるワーカーを登録し名前で具体的な型のまま取り出せる()
     {
-        var registry = new TaskDbContext();
-        var length = new LengthTask(4);   // EiiiTask<string, int>
-        var times = new TestTask(4);      // EiiiTask<int, int>
+        var registry = new EiiiWorkerRegistry();
+        var length = new LengthTask(4);   // EiiiWorker<string, int>
+        var times = new TestTask(4);      // EiiiWorker<int, int>
 
         Assert.Same(length, registry.Add("length", length));   // 戻り値は LengthTask 型
         Assert.Same(times, registry.Add("times", times));
 
         Assert.Same(length, registry.Get<LengthTask>("length"));
-        Assert.Same(times, registry.Get<EiiiTask<int, int>>("times"));
-        Assert.Same(times, registry.Get<EiiiTask>("times"));   // 基底型でも取り出せる
+        Assert.Same(times, registry.Get<EiiiWorker<int, int>>("times"));
+        Assert.Same(times, registry.Get<EiiiWorker>("times"));   // 基底型でも取り出せる
     }
 
     [Fact]
     public void 同じ名前の登録はArgumentExceptionで既存の登録は変わらない()
     {
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var first = registry.Add("a", new TestTask(4));
 
         Assert.Throws<ArgumentException>(() => registry.Add("a", new TestTask(4)));
@@ -42,10 +42,10 @@ public class RegistryTests
     [Fact]
     public void 未登録の名前はKeyNotFoundExceptionで型違いはInvalidCastException()
     {
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         registry.Add("length", new LengthTask(4));
 
-        Assert.Throws<KeyNotFoundException>(() => registry.Get<EiiiTask>("missing"));
+        Assert.Throws<KeyNotFoundException>(() => registry.Get<EiiiWorker>("missing"));
         Assert.Throws<InvalidCastException>(() => registry.Get<TestTask>("length"));
         Assert.Throws<ArgumentNullException>(() => registry.Add<TestTask>(null!, new TestTask(4)));
     }
@@ -53,7 +53,7 @@ public class RegistryTests
     [Fact]
     public async Task StartAllで全ワーカーが起動しStopAllAsyncで全ワーカーが停止する()
     {
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var length = registry.Add("length", new LengthTask(4));
         var times = registry.Add("times", new TestTask(4));
 
@@ -71,7 +71,7 @@ public class RegistryTests
     public async Task CompleteAllAsyncで上流から順に残りを処理して正常終了し結果が下流のコールバックまで届く()
     {
         var results = new ConcurrentQueue<int>();
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var length = registry.Add("length", new LengthTask(8));                         // 上流: string → int
         var times = registry.Add("times", new TestTask(8, callback: results.Enqueue));   // 下流: int → int * 10
         length.LinkTo(times.Input);   // ChannelWriter<int>: 上流の TOut と下流の TIn が一致しないとコンパイルできない
@@ -89,7 +89,7 @@ public class RegistryTests
     public async Task CompleteAllAsyncは上流が例外で終わっても次へ進み下流は入力完了を待ち続けず受け取った分を処理して終わる()
     {
         var results = new ConcurrentQueue<int>();
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var length = registry.Add("length", new LengthTask(8));
         var times = registry.Add("times", new TestTask(8, callback: results.Enqueue));
         length.LinkTo(times.Input);
@@ -108,7 +108,7 @@ public class RegistryTests
     [Fact]
     public async Task LinkToだけでは上流がFaultedでも下流の入力は閉じられずCompleteAllAsyncが閉じて終わらせる()
     {
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var length = registry.Add("length", new LengthTask(8));
         var times = registry.Add("times", new TestTask(8));
         length.LinkTo(times.Input);
@@ -129,7 +129,7 @@ public class RegistryTests
     {
         var release = new TaskCompletionSource();
         var results = new ConcurrentQueue<int>();
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var downstream = registry.Add("downstream", new TestTask(8, callback: results.Enqueue));   // 逆順に登録（制約違反）
         var upstream = registry.Add("upstream", new TestTask(8, async (_, _) => await release.Task));
         upstream.LinkTo(downstream.Input);
@@ -151,7 +151,7 @@ public class RegistryTests
     [Fact]
     public async Task 起動していないワーカーはCompleteAllAsyncで起動されず未処理が残る()
     {
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
         var idle = registry.Add("idle", new TestTask(4));
         idle.Input.TryWrite(1);
 
@@ -164,7 +164,7 @@ public class RegistryTests
     [Fact]
     public void 複数スレッドから異なる名前を同時に登録してもすべて登録される()
     {
-        var registry = new TaskDbContext();
+        var registry = new EiiiWorkerRegistry();
 
         Parallel.For(0, 200, i => registry.Add($"w{i}", new TestTask(1)));
 

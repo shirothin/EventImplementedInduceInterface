@@ -1,4 +1,4 @@
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
 /// ワーカーの出力を観測するコールバック（原型 TaskToCallback(string) の出力型を任意化）。

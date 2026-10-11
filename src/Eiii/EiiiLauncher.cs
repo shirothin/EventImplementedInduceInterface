@@ -1,4 +1,4 @@
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
 /// 呼び出し元の代理として要求のイベントを発行する（原型 EiiiLauncher&lt;T&gt;）。
@@ -8,26 +8,26 @@ namespace EventImplementedInduceInterface;
 public class EiiiLauncher<T> : ILauncher<T>
 {
     /// <inheritdoc/>
-    public event EventHandler<object, EiiiEventArgs<T>>? Raise;
+    public event EventHandler<object, EiiiEventArgs<T>>? Requested;
 
     /// <inheritdoc/>
-    public bool Trigger(object sender, T value)
+    public bool Request(object sender, T value)
     {
         ArgumentNullException.ThrowIfNull(sender);
         var e = new EiiiEventArgs<T>(value);
-        OnRaise(sender, e);
+        OnRequested(sender, e);
         return e.Accepted;
     }
 
     /// <summary>
-    /// <see cref="Raise"/> を発行する（原型の public OnChanged に相当。sender を呼び出し元に改め、protected virtual にした）。
+    /// <see cref="Requested"/> を発行する（原型の public OnChanged に相当。sender を呼び出し元に改め、protected virtual にした）。
     /// 購読者は呼び出し元のスレッドで同期的に呼ばれる。
     /// </summary>
     /// <param name="sender">要求の呼び出し元。</param>
     /// <param name="e">要求の値と受理結果。</param>
-    protected virtual void OnRaise(object sender, EiiiEventArgs<T> e)
+    protected virtual void OnRequested(object sender, EiiiEventArgs<T> e)
     {
-        EventHandler<object, EiiiEventArgs<T>>? handler = Raise;   // 読み取り後に購読解除されても安全なよう、1 回だけ読む
+        EventHandler<object, EiiiEventArgs<T>>? handler = Requested;   // 読み取り後に購読解除されても安全なよう、1 回だけ読む
         if (handler is not null) handler(sender, e);                 // マルチキャスト: 登録順にすべての購読者を呼ぶ
     }
 }

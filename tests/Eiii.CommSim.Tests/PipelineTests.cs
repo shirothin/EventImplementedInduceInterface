@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
-using EventImplementedInduceInterface;
-using EventImplementedInduceInterface.CommSim;
+using Eiii;
+using Eiii.CommSim;
 
 namespace Eiii.CommSim.Tests;
 
@@ -24,7 +24,7 @@ public class PipelineTests
             Receiver.LinkTo(Parser.Input);
         }
 
-        public TaskDbContext Registry { get; } = new();
+        public EiiiWorkerRegistry Registry { get; } = new();
         public ReceiverTask Receiver { get; }
         public ParserTask Parser { get; }
         public ConcurrentQueue<Reading> Readings { get; } = new();

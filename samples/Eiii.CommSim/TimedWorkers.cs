@@ -1,6 +1,6 @@
 using System.Threading.Channels;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>時間方式の受信 Worker への入力。データ・時刻の通知・応答待ちの開始を、同じ Channel の中で到着順に扱う。</summary>
 public abstract record RxInput;
@@ -29,10 +29,10 @@ public sealed record ResponseExpected(DateTimeOffset RequestedAt) : RxInput;
 /// 投入順序は Channel の実装に依存する。この状況での動作は検証していない。
 /// </remarks>
 public sealed class TimedReceiverTask(int capacity, TimeoutFramer framer, TaskToCallback<TimedFrame>? callback = null)
-    : EiiiTask<RxInput, TimedFrame>(capacity, callback)
+    : EiiiWorker<RxInput, TimedFrame>(capacity, callback)
 {
     /// <summary>入力の種類に応じて framer を呼び、確定したフレームを出力する。</summary>
-    protected override async ValueTask OnRequestAsync(RxInput request, CancellationToken cancellationToken)
+    protected override async ValueTask ProcessAsync(RxInput request, CancellationToken cancellationToken)
     {
         IReadOnlyList<TimedFrame> frames;
         switch (request)
@@ -85,10 +85,10 @@ public static class OsdParser
 /// <param name="work">解析前に行う時間のかかる処理の模擬（null なら即座に解析する）。</param>
 /// <param name="callback">解析結果ごとに呼ばれるコールバック。</param>
 public sealed class OsdParserTask(int capacity, Func<TimedFrame, CancellationToken, Task>? work = null, TaskToCallback<OsdResponse>? callback = null)
-    : EiiiTask<TimedFrame, OsdResponse>(capacity, callback)
+    : EiiiWorker<TimedFrame, OsdResponse>(capacity, callback)
 {
     /// <summary>フレームを解析して結果を出力する。</summary>
-    protected override async ValueTask OnRequestAsync(TimedFrame request, CancellationToken cancellationToken)
+    protected override async ValueTask ProcessAsync(TimedFrame request, CancellationToken cancellationToken)
     {
         if (work is not null) await work(request, cancellationToken);
         await EmitAsync(OsdParser.Parse(request), cancellationToken);

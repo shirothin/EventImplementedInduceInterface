@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>解析結果。解析できなかったフレームも <see cref="Error"/> 付きで出力する（黙って捨てない）。</summary>
 /// <param name="Raw">元のフレームの内容。</param>

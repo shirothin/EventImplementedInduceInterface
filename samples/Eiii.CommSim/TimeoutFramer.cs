@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>時間方式で確定したフレームの終了理由。</summary>
 public enum FrameEnd

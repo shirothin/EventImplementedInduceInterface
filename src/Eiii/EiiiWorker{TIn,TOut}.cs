@@ -1,6 +1,6 @@
 using System.Threading.Channels;
 
-namespace EventImplementedInduceInterface;
+namespace Eiii;
 
 /// <summary>
 /// 型付き要求（<typeparamref name="TIn"/>）を容量制限付きの <see cref="Channel{T}"/> で受け取り、
@@ -12,9 +12,9 @@ namespace EventImplementedInduceInterface;
 /// <para>同期投入は <c>Input.TryWrite</c>（満杯・入力完了なら即座に false）、
 /// 非同期投入は <c>Input.WriteAsync</c>（満杯なら空きが出るまで待つ）。データを黙って破棄することはない。</para>
 /// <para>バックプレッシャーによる無期限待機: 下流が未起動・停止中・Faulted のまま満杯になると、
-/// <see cref="EmitAsync"/> は空きを待ち続ける。この待機は <see cref="EiiiTask.StopAsync"/> のキャンセルで解除される。</para>
+/// <see cref="EmitAsync"/> は空きを待ち続ける。この待機は <see cref="EiiiWorker.StopAsync"/> のキャンセルで解除される。</para>
 /// </remarks>
-public abstract class EiiiTask<TIn, TOut> : EiiiTask
+public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
 {
     private readonly Channel<TIn> channel;
     private readonly TaskToCallback<TOut>? callback;
@@ -27,7 +27,7 @@ public abstract class EiiiTask<TIn, TOut> : EiiiTask
     /// 0 はバッファを持たない受け渡しになり、ワーカーが読み取りを待っていないと <c>TryWrite</c> は false を返す。
     /// </param>
     /// <param name="callback">出力ごとにワーカー上で呼ばれるコールバック（原型の cb）。null なら呼ばない。</param>
-    protected EiiiTask(int capacity, TaskToCallback<TOut>? callback = null)
+    protected EiiiWorker(int capacity, TaskToCallback<TOut>? callback = null)
     {
         channel = Channel.CreateBounded<TIn>(new BoundedChannelOptions(capacity)
         {
@@ -63,19 +63,19 @@ public abstract class EiiiTask<TIn, TOut> : EiiiTask
     /// 制約: Launcher と Worker は 1 対 1 で使う。1 つの Launcher を複数の Worker が購読した場合の Accepted の競合（最後の書き込みが残る）は、初期版ではサポートしない。
     /// </summary>
     /// <param name="launcher">要求を発行する Launcher。</param>
-    public void Subscribe(ILauncher<TIn> launcher)
+    public void Attach(ILauncher<TIn> launcher)
     {
         ArgumentNullException.ThrowIfNull(launcher);
-        launcher.Raise -= handler;   // 未登録なら何もしない。デリゲートは対象インスタンスとメソッドが同じなら等しい
-        launcher.Raise += handler;
+        launcher.Requested -= handler;   // 未登録なら何もしない。デリゲートは対象インスタンスとメソッドが同じなら等しい
+        launcher.Requested += handler;
     }
 
     /// <summary>Launcher の要求イベントの購読を解除する。</summary>
     /// <param name="launcher">購読を解除する Launcher。</param>
-    public void Unsubscribe(ILauncher<TIn> launcher)
+    public void Detach(ILauncher<TIn> launcher)
     {
         ArgumentNullException.ThrowIfNull(launcher);
-        launcher.Raise -= handler;
+        launcher.Requested -= handler;
     }
 
     /// <summary>
@@ -86,12 +86,12 @@ public abstract class EiiiTask<TIn, TOut> : EiiiTask
 
     /// <summary>要求を 1 件処理する（原型 <c>eventFunc</c> に相当）。ワーカー上で 1 件ずつ呼ばれる。</summary>
     /// <param name="request">入力キューから読み出した要求。</param>
-    /// <param name="cancellationToken"><see cref="EiiiTask.StopAsync"/> で取り消されるトークン。</param>
+    /// <param name="cancellationToken"><see cref="EiiiWorker.StopAsync"/> で取り消されるトークン。</param>
     /// <returns>処理の完了を表す ValueTask。</returns>
-    protected abstract ValueTask OnRequestAsync(TIn request, CancellationToken cancellationToken);
+    protected abstract ValueTask ProcessAsync(TIn request, CancellationToken cancellationToken);
 
     /// <summary>入力が閉じられ、残りの要求をすべて処理した後に 1 回呼ばれる。保持中のデータを出し切る場所。</summary>
-    /// <param name="cancellationToken"><see cref="EiiiTask.StopAsync"/> で取り消されるトークン。</param>
+    /// <param name="cancellationToken"><see cref="EiiiWorker.StopAsync"/> で取り消されるトークン。</param>
     /// <returns>処理の完了を表す ValueTask。</returns>
     protected virtual ValueTask OnInputCompletedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
 
@@ -115,7 +115,7 @@ public abstract class EiiiTask<TIn, TOut> : EiiiTask
         await foreach (var request in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();   // ReadAllAsync は要素が続く間キャンセルを確認しない
-            await OnRequestAsync(request, cancellationToken).ConfigureAwait(false);
+            await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
         }
         await OnInputCompletedAsync(cancellationToken).ConfigureAwait(false);
         downstream?.TryComplete();

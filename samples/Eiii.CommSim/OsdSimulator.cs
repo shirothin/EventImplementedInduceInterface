@@ -1,7 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>
 /// OSD 取得コマンドの応答を返す機器の模擬。値は記憶に基づく概算（約 300 文字、断片間 数十～100ms、応答まで最大約 5 秒）で、確定仕様ではない。

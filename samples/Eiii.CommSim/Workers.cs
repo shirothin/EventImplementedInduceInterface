@@ -1,4 +1,4 @@
-namespace EventImplementedInduceInterface.CommSim;
+namespace Eiii.CommSim;
 
 /// <summary>
 /// Receiver: 受信チャンク（string）からフレーム（Frame）を確定して出力する Worker。
@@ -10,10 +10,10 @@ namespace EventImplementedInduceInterface.CommSim;
 /// 未確定データは framer に残り、次の Start 後に届くチャンクと連結される。</para>
 /// </remarks>
 public sealed class ReceiverTask(int capacity, DelimiterFramer framer, TaskToCallback<Frame>? callback = null)
-    : EiiiTask<string, Frame>(capacity, callback)
+    : EiiiWorker<string, Frame>(capacity, callback)
 {
     /// <summary>チャンクを framer に渡し、確定したフレームを順に出力する。出力先が満杯なら WriteAsync で待つ。</summary>
-    protected override async ValueTask OnRequestAsync(string request, CancellationToken cancellationToken)
+    protected override async ValueTask ProcessAsync(string request, CancellationToken cancellationToken)
     {
         foreach (var frame in framer.Feed(request)) await EmitAsync(frame, cancellationToken);
     }
@@ -30,10 +30,10 @@ public sealed class ReceiverTask(int capacity, DelimiterFramer framer, TaskToCal
 /// <param name="work">解析前に行う時間のかかる処理の模擬（null なら即座に解析する）。</param>
 /// <param name="callback">解析結果ごとに呼ばれるコールバック。</param>
 public sealed class ParserTask(int capacity, Func<Frame, CancellationToken, Task>? work = null, TaskToCallback<Reading>? callback = null)
-    : EiiiTask<Frame, Reading>(capacity, callback)
+    : EiiiWorker<Frame, Reading>(capacity, callback)
 {
     /// <summary>フレームを解析して結果を出力する。</summary>
-    protected override async ValueTask OnRequestAsync(Frame request, CancellationToken cancellationToken)
+    protected override async ValueTask ProcessAsync(Frame request, CancellationToken cancellationToken)
     {
         if (work is not null) await work(request, cancellationToken);
         await EmitAsync(FrameParser.Parse(request), cancellationToken);
