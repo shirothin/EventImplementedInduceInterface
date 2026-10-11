@@ -13,8 +13,11 @@ namespace Eiii.CommSim;
 /// </summary>
 internal static class Program
 {
-    private static async Task Main(string[] args)
+    private static async Task<int> Main(string[] args)
     {
+        // custom: 任意の電文を投入して Delimiter / Idle / Fixed を比較する（引数の詳細は custom --help）
+        if (args.Length > 0 && args[0] == "custom") return await CustomRunner.RunAsync(args[1..], Console.Out, Console.Error);
+
         var only = args.Length > 0 ? args[0] : "all";
         if (only is "all" or "delimiter")
         {
@@ -29,6 +32,7 @@ internal static class Program
             await OsdFixedAsync();
             await OsdNoResponseAsync();
         }
+        return 0;
     }
 
     // ---- 時間方式（OSD 取得など終端マーカーのない応答）。値は記憶に基づく概算で、確定仕様ではない ----

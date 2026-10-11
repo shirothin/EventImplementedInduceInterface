@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\samples\Eiii.Comm\Eiii.Comm.csproj" />
+    <ProjectReference Include="..\..\samples\Eiii.CommSim\Eiii.CommSim.csproj" />
   </ItemGroup>
 
 </Project>

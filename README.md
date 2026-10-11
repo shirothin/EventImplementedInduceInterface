@@ -15,7 +15,7 @@
 | 区分 | 内容 |
 |---|---|
 | 実装済み | ライブラリ本体（`src/Eiii`）、原型 Main の移植サンプル、通信シミュレーター（CR 終端方式・時間経過方式）、操作できるデモ（`Eiii.DemoConsole`） |
-| テスト | xUnit で 4 プロジェクト・計 103 件（原型の特性 11、ライブラリ 46、通信 34、デモ 12）。Debug / Release とも成功した実行結果を確認済み |
+| テスト | xUnit で 4 プロジェクト・計 152 件（原型の特性 11、ライブラリ 46、通信 83、デモ 12）。Release ではすべて成功。Debug では、通信 83 件のうち custom モード追加後の実行が Smart App Control の読み込み拒否により未検証（それ以前の 34 件は Debug でも成功） |
 | 未実装 | 一時停止（Pause / Resume）、Single 実行、実行報告（処理中の要求の記録）、再送や重複排除、Worker 間の依存関係の自動解析 |
 | 未検証 | 実際のキー入力による DemoConsole の全画面表示と操作（自動検証は標準入力による行単位表示のみ）。Windows 以外の OS |
 
@@ -148,7 +148,7 @@ dotnet test Eiii.slnx -c Release
 |---|---|---|
 | `Eiii.Legacy.Tests` | 11 | 原型の動作の記録（意図・欠陥・不明に分類） |
 | `Eiii.Tests` | 46 | 状態の観測、正常終了と停止、満杯時の動作、多重起動の防止、CTS の解放、Launcher と Callback、Registry |
-| `Eiii.CommSim.Tests` | 34 | CR 終端と時間経過のフレーム確定、バックプレッシャー下でも受信時刻で判定されること |
+| `Eiii.CommSim.Tests` | 83 | CR 終端と時間経過のフレーム確定、バックプレッシャー下でも受信時刻で判定されること、custom モード（引数・エスケープ・ファイル・分割） |
 | `Eiii.DemoConsole.Tests` | 12 | コマンドの直列化、無応答、誤分割や遅れた応答による取り違え、再起動、正常終了 |
 
 > 開発に使った Windows 環境では Smart App Control が有効で、新しくビルドした DLL の読み込みがときどき拒否されました。その回は「未検証」として扱い、設定の変更や回避はしていません。上の件数は、読み込みが許可された回で Debug / Release とも成功を確認したものです。
@@ -160,7 +160,7 @@ dotnet test Eiii.slnx -c Release
 | サンプル | 実行方法 | 内容 |
 |---|---|---|
 | `Eiii.Sample` | `dotnet run --project samples/Eiii.Sample` | 原型の Main の移植。Space で要求、B で 6 件、R で再起動、Esc で正常終了 |
-| `Eiii.CommSim` | `dotnet run --project samples/Eiii.CommSim` | 通信シミュレーター。詳しくは [samples/Eiii.CommSim/README.md](samples/Eiii.CommSim/README.md) |
+| `Eiii.CommSim` | `dotnet run --project samples/Eiii.CommSim` | 通信シミュレーター。`custom` で任意の電文を投入して 3 方式を比較できる。詳しくは [samples/Eiii.CommSim/README.md](samples/Eiii.CommSim/README.md) |
 | `Eiii.DemoConsole` | `dotnet run --project samples/Eiii.DemoConsole` | 操作して観察するデモ。詳しくは [samples/Eiii.DemoConsole/README.md](samples/Eiii.DemoConsole/README.md) |
 
 ---
