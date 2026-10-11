@@ -4,8 +4,8 @@ using EventImplementedInduceInterface;
 namespace Eiii.Tests;
 
 /// <summary>要求 r を処理すると r を記録し、r * 10 を出力するテスト用タスク。ハンドラーの同時実行数も記録する。</summary>
-internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueTask>? onRequest = null)
-    : EiiiTask<int, int>(capacity)
+internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueTask>? onRequest = null, TaskToCallback<int>? callback = null)
+    : EiiiTask<int, int>(capacity, callback)
 {
     private int concurrent;
     private int maxConcurrent;
