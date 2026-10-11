@@ -1,0 +1,152 @@
+namespace EventImplementedInduceInterface;
+
+/// <summary>
+/// 入出力型に依存しないワーカーの寿命制御（原型 <c>EiiiTask&lt;T&gt;</c> の
+/// <c>Start</c> / <c>restartTask</c> / <c>GetStatus</c> に相当）。
+/// 状態は独自の列挙型を持たず、実際の Task（<see cref="Execution"/>）から観測する。
+/// </summary>
+/// <remarks>
+/// <para>正常終了: <c>CompleteInput</c> で入力を閉じると、受理済みの要求をすべて処理してから終了する。</para>
+/// <para>中断: <see cref="StopAsync"/> はキャンセルによる中断であり、処理中だった要求は失われ得る。
+/// まだ読み出していない要求は入力キューに残り、次の <see cref="Start"/> で処理される。</para>
+/// <para>禁止事項: ワーカー内部（要求の処理中）から自身の <see cref="StopAsync"/> / <see cref="RestartAsync"/> を
+/// await してはならない。自身の終了を自身で待つためデッドロックする（検出はしない）。</para>
+/// </remarks>
+public abstract class EiiiTask
+{
+    private readonly Lock gate = new();
+    private Run? current;
+
+    /// <summary>
+    /// 現在または直近の実行を表す Task。未起動なら null。
+    /// 実行中の <see cref="Task.Status"/> は <see cref="TaskStatus.WaitingForActivation"/>
+    /// （<see cref="Task.Run(Func{Task})"/> が返す代理 Task のため Running にはならない）。
+    /// 終了後は RanToCompletion（正常終了）、Canceled（<see cref="StopAsync"/>）、Faulted（例外。原因は <see cref="Task.Exception"/>）。
+    /// </summary>
+    public Task? Execution
+    {
+        get
+        {
+            lock (gate) return current?.Execution;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Execution"/> が存在し、まだ完了していない（<see cref="Task.IsCompleted"/> が false）とき true。
+    /// 停止を要求した後でも、ワーカーが実際に終了するまでは true のまま。
+    /// </summary>
+    public bool IsRunning => Execution is { IsCompleted: false };
+
+    /// <summary>入力キューに残っている（まだ読み出していない）要求の数。</summary>
+    public abstract int PendingCount { get; }
+
+    /// <summary>
+    /// ワーカーを起動する。実行中（停止処理中を含む）なら何もしない（多重起動しない）。
+    /// 実行の経過と結果は <see cref="Execution"/> で観測する。
+    /// </summary>
+    public void Start()
+    {
+        lock (gate)
+        {
+            if (current is { Execution.IsCompleted: false }) return;
+            current = new Run(gate, RunAsync);
+        }
+    }
+
+    /// <summary>
+    /// 呼び出し時点の実行をキャンセルで中断し、その終了とキャンセルコールバックの完了を待つ。
+    /// 処理中だった要求は失われ得る。結果（Canceled / Faulted など）は <see cref="Execution"/> で観測する。
+    /// </summary>
+    /// <returns>ワーカーが終了したときに完了する Task。ワーカーの例外はここでは再スローしない。</returns>
+    public async Task StopAsync()
+    {
+        Task cancelling;
+        Task execution;
+        lock (gate)
+        {
+            if (current is null) return;
+            cancelling = current.RequestCancellation();
+            execution = current.Execution;
+        }
+        await Task.WhenAll(cancelling, execution).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+    }
+
+    /// <summary>
+    /// <see cref="StopAsync"/> で呼び出し時点の実行の終了を待ってから <see cref="Start"/> する。
+    /// 完了した時点で、呼び出し時点の実行は終了しており、<see cref="Execution"/> はそれより後に開始された実行を指す。
+    /// 並行に呼ばれた場合、完了の順序は呼び出しの順序と一致するとは限らない。
+    /// </summary>
+    /// <returns>再起動の要求が終わったときに完了する Task。</returns>
+    public async Task RestartAsync()
+    {
+        await StopAsync().ConfigureAwait(false);
+        Start();
+    }
+
+    /// <summary>入力を閉じる。ワーカーは受理済みの要求をすべて処理してから正常終了する。閉じた入力は再び開けない。</summary>
+    public abstract void CompleteInput();
+
+    /// <summary>ワーカー本体。<see cref="Start"/> ごとに 1 回、スレッドプール上で実行される。</summary>
+    /// <param name="cancellationToken"><see cref="StopAsync"/> で取り消されるトークン。</param>
+    /// <returns>ワーカーの終了を表す Task。</returns>
+    protected abstract Task RunAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 1 回の実行。CTS の所有者であり、生成・取消・破棄をすべて自分で行う。
+    /// 取消と破棄は所有者の lock（<c>gate</c>）の内側でだけ行うため、互いに競合しない。
+    /// 破棄は「実行が完了」かつ「要求された取消のコールバックが完了」を満たした時点で、ちょうど 1 回行う。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "CTS の解放責任は Run 自身にあり、実行と取消コールバックの完了後に ReleaseIfDone で 1 回だけ解放する。外部から任意の時点で解放させないため IDisposable は実装しない。")]
+    private sealed class Run
+    {
+        private readonly Lock gate;
+        private readonly CancellationTokenSource cancellation = new();
+        private Task? cancelling;
+        private bool disposed;
+
+        /// <remarks>
+        /// 初期化途中の公開を防ぐ順序: ワーカー（Task.Run のラムダ）は body と token だけを捕捉し、this を参照しない。
+        /// this を継続へ渡すのは全フィールドの代入後であり、継続（ReleaseIfDone）は gate を取得するため、
+        /// gate を保持して Run を構築している <see cref="Start"/> が抜けるまで実行されない。
+        /// </remarks>
+        public Run(Lock gate, Func<CancellationToken, Task> body)
+        {
+            this.gate = gate;
+            var token = cancellation.Token;
+            Execution = Task.Run(() => body(token));
+            ReleaseWhenCompleted(Execution);
+        }
+
+        public Task Execution { get; }
+
+        /// <summary>
+        /// gate の内側で呼ぶ。CancelAsync は取消状態への遷移だけを同期的に行い、コールバックは別スレッドで実行する。
+        /// 既に終了した実行は取り消さない（破棄済みの CTS に触れない）。
+        /// </summary>
+        public Task RequestCancellation()
+        {
+            if (disposed || Execution.IsCompleted) return Task.CompletedTask;
+            if (cancelling is null)
+            {
+                cancelling = cancellation.CancelAsync();
+                ReleaseWhenCompleted(cancelling);
+            }
+            return cancelling;
+        }
+
+        private void ReleaseWhenCompleted(Task task)
+            => task.ContinueWith(static (_, state) => ((Run)state!).ReleaseIfDone(), this,
+                                 CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+
+        private void ReleaseIfDone()
+        {
+            lock (gate)
+            {
+                if (disposed || !Execution.IsCompleted || cancelling is { IsCompleted: false }) return;
+                disposed = true;
+                cancellation.Dispose();
+            }
+        }
+    }
+}

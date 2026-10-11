@@ -2,7 +2,11 @@
   <Folder Name="/legacy/">
     <Project Path="legacy/Eiii.Legacy.csproj" />
   </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Eiii/Eiii.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Eiii.Legacy.Tests/Eiii.Legacy.Tests.csproj" />
+    <Project Path="tests/Eiii.Tests/Eiii.Tests.csproj" />
   </Folder>
 </Solution>
