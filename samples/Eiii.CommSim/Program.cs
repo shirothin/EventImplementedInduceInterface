@@ -5,16 +5,119 @@ using static EventImplementedInduceInterface.CommSim.DeviceSimulator;
 namespace EventImplementedInduceInterface.CommSim;
 
 /// <summary>
-/// 通信シミュレーター（デリミタ方式）。Device → Receiver（string → Frame）→ Parser（Frame → Reading）。
-/// Worker 間の接続（LinkTo）と実行順序はこのクラスで指定し、Registry は登録と一括の寿命管理だけに使う。
+/// 通信シミュレーター。
+/// 通常のコマンド応答（CR 終端）はデリミタ方式（A～C）: Device → Receiver（string → Frame）→ Parser（Frame → Reading）。
+/// OSD 取得などの終端マーカーのない応答は時間方式（D～G）: Device → TimedReceiver（RxInput → TimedFrame）→ OsdParser。
+/// コマンドの種類に応じた方式の選択、Worker 間の接続（LinkTo）、実行順序はアプリケーション（このクラス）の責務で、
+/// Registry は登録と一括の寿命管理だけに使う。ライブラリ本体は通信の知識を持たない。
 /// </summary>
 internal static class Program
 {
-    private static async Task Main()
+    private static async Task Main(string[] args)
     {
-        await NormalCompletionAsync();
-        await BackpressureAsync();
-        await CancellationAsync();
+        var only = args.Length > 0 ? args[0] : "all";
+        if (only is "all" or "delimiter")
+        {
+            await NormalCompletionAsync();
+            await BackpressureAsync();
+            await CancellationAsync();
+        }
+        if (only is "all" or "timeout")
+        {
+            await OsdIdleAsync();
+            await OsdLongGapAsync();
+            await OsdFixedAsync();
+            await OsdNoResponseAsync();
+        }
+    }
+
+    // ---- 時間方式（OSD 取得など終端マーカーのない応答）。値は記憶に基づく概算で、確定仕様ではない ----
+
+    private static readonly TimeSpan RelayLatency = TimeSpan.FromMilliseconds(1500);   // 中継による応答開始までの時間（参考: 最大約 5 秒）
+    private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(6);        // 応答待ちの上限（フレーム確定の閾値ではない）
+
+    /// <summary>D. Idle 方式: 100ms 以下の間欠を含む約 300 文字の応答を、閾値 250ms で 1 つに確定する。</summary>
+    private static async Task OsdIdleAsync()
+    {
+        Log.Header("D. OSD 応答 × Idle 方式（無通信 250ms で確定。断片間の間欠は 10～100ms）");
+        var response = OsdSimulator.CreateResponse(300, screenId: 1);
+        var fragments = OsdSimulator.Fragment(response, seed: 1, minChunk: 8, maxChunk: 40, TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(100));
+        var results = await RunOsdAsync(new TimeoutOptions { IdleTimeout = TimeSpan.FromMilliseconds(250), ResponseTimeout = ResponseTimeout },
+                                        fragments, expectedResults: 1);
+        Log.Write("main", $"結果: 応答 {results.Count} 件、内容が送信と一致（CR を保持）={results.Count == 1 && string.Join('\r', results[0].Lines) == response}");
+    }
+
+    /// <summary>E. Idle 方式の誤分割: 応答の途中に閾値を超える 400ms の間欠があると、1 つの応答が 2 つに分かれる。</summary>
+    private static async Task OsdLongGapAsync()
+    {
+        Log.Header("E. OSD 応答 × Idle 方式（途中に 400ms の間欠 → 閾値 250ms を超えて誤分割）");
+        var fragments = OsdSimulator.Fragment(OsdSimulator.CreateResponse(300, screenId: 2), seed: 2, 8, 40,
+                                              TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(100)).ToList();
+        fragments[fragments.Count / 2] = (fragments[fragments.Count / 2].Text, TimeSpan.FromMilliseconds(400));
+        var results = await RunOsdAsync(new TimeoutOptions { IdleTimeout = TimeSpan.FromMilliseconds(250), ResponseTimeout = ResponseTimeout },
+                                        fragments, expectedResults: 2);
+        Log.Write("main", $"結果: 応答 {results.Count} 件（本来は 1 件）。時間条件による確定は完全性の証明にならない");
+    }
+
+    /// <summary>F. Fixed 方式: 最初の受信から 2 秒で収集を打ち切る。途中の 400ms の間欠では分割しない。</summary>
+    private static async Task OsdFixedAsync()
+    {
+        Log.Header("F. OSD 応答 × Fixed 方式（最初の受信から 2 秒で収集を終了。途中に 400ms の間欠）");
+        var fragments = OsdSimulator.Fragment(OsdSimulator.CreateResponse(300, screenId: 3), seed: 2, 8, 40,
+                                              TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(100)).ToList();
+        fragments[fragments.Count / 2] = (fragments[fragments.Count / 2].Text, TimeSpan.FromMilliseconds(400));
+        var results = await RunOsdAsync(new TimeoutOptions { CollectionTimeout = TimeSpan.FromSeconds(2), ResponseTimeout = ResponseTimeout },
+                                        fragments, expectedResults: 1);
+        Log.Write("main", $"結果: 応答 {results.Count} 件。Idle 方式より確定が遅い（最後の受信から待つのではなく、最初の受信から 2 秒）");
+    }
+
+    /// <summary>G. 応答なし: 応答待ちの上限（6 秒）を過ぎても最初の受信がなければ NoResponse を通知する。</summary>
+    private static async Task OsdNoResponseAsync()
+    {
+        Log.Header("G. 応答なし（応答待ち 6 秒。フレーム確定の閾値とは別の概念）");
+        var results = await RunOsdAsync(new TimeoutOptions { IdleTimeout = TimeSpan.FromMilliseconds(250), ResponseTimeout = ResponseTimeout },
+                                        fragments: null, expectedResults: 1);
+        Log.Write("main", $"結果: {(results.Count == 1 ? results[0].End.ToString() : "なし")}");
+    }
+
+    private static async Task<List<OsdResponse>> RunOsdAsync(TimeoutOptions options, IReadOnlyList<(string Text, TimeSpan GapBefore)>? fragments, int expectedResults)
+    {
+        var time = TimeProvider.System;
+        var results = new ConcurrentQueue<OsdResponse>();
+        var registry = new TaskDbContext();
+        var receiver = registry.Add("osd-receiver", new TimedReceiverTask(256, new TimeoutFramer(options),
+            new TaskToCallback<TimedFrame>(frame => Log.Write("receiver",
+                $"フレーム確定 [{frame.End}] 長さ={frame.Text.Length}" +
+                (frame.FirstReceivedAt is { } first ? $" 最初→最後の受信={(frame.LastReceivedAt!.Value - first).TotalMilliseconds:0}ms" : "")))));
+        var parser = registry.Add("osd-parser", new OsdParserTask(4, callback: new TaskToCallback<OsdResponse>(r =>
+        {
+            results.Enqueue(r);
+            Log.Write("parser", $"OSD 応答 [{r.End}] 行数={r.Lines.Count} 長さ={r.Length}（終端マーカーがないため完全性は未保証）");
+        })));
+        receiver.LinkTo(parser.Input);
+        registry.StartAll();
+
+        using var ticking = new CancellationTokenSource();
+        var ticks = TickSource.RunAsync(receiver.Input, TimeSpan.FromMilliseconds(25), time, ticking.Token);
+
+        await receiver.Input.WriteAsync(new ResponseExpected(time.GetUtcNow()));
+        Log.Write("main", "OSD 取得要求を送信（応答待ち開始）");
+        if (fragments is not null)
+        {
+            await Task.Delay(RelayLatency, time);
+            var gaps = fragments.Skip(1).Select(f => f.GapBefore.TotalMilliseconds).ToArray();
+            Log.Write("device", $"応答開始: {fragments.Sum(f => f.Text.Length)} 文字を {fragments.Count} チャンクで送信 " +
+                                $"（間欠 {gaps.Min():0}～{gaps.Max():0}ms、内部の CR={fragments.Sum(f => f.Text.Count(c => c == '\r'))} 個）");
+            await OsdSimulator.SendAsync(receiver.Input, fragments, time);
+        }
+
+        var deadline = time.GetUtcNow() + ResponseTimeout + TimeSpan.FromSeconds(3);
+        while (results.Count < expectedResults && time.GetUtcNow() < deadline) await Task.Delay(TimeSpan.FromMilliseconds(20), time);
+
+        await ticking.CancelAsync();
+        await ticks;
+        await registry.CompleteAllAsync();
+        return [.. results];
     }
 
     /// <summary>A. 正常終了: 分割されたチャンクからフレームを復元し、末尾の未確定データも結果として確認する。</summary>
