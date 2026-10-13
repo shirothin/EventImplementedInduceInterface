@@ -97,7 +97,10 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     /// <returns>処理の完了を表す ValueTask。</returns>
     protected abstract ValueTask ProcessAsync(TIn request, CancellationToken cancellationToken);
 
-    /// <summary>入力が閉じられ、残りの要求をすべて処理した後に 1 回呼ばれる。保持中のデータを出し切る場所。</summary>
+    /// <summary>
+    /// 入力が完了し、キューが空になったときに呼び出される。保持中のデータを出し切る場所。
+    /// 処理中に例外が発生して Worker が Faulted となり、再度起動された場合は、複数回呼び出されることがある。
+    /// </summary>
     /// <param name="cancellationToken"><see cref="EiiiWorker.StopAsync"/> で取り消されるトークン。</param>
     /// <returns>処理の完了を表す ValueTask。</returns>
     protected virtual ValueTask OnInputCompletedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;

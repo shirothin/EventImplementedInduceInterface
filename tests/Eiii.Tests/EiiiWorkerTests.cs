@@ -396,6 +396,160 @@ public class EiiiWorkerStateTests
     }
 
     [Fact]
+    public async Task CompleteAsyncは実行中のWorkerを正常終了させtrueを返し下流の入力を閉じるが下流Worker自身は終わらせない()
+    {
+        var downstream = new TestTask(4);
+        var task = new TestTask(4);
+        task.LinkTo(downstream.Input);
+        for (int i = 1; i <= 3; i++) task.Input.TryWrite(i);
+        task.Start();
+
+        Assert.True(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+
+        Assert.Equal([1, 2, 3], task.Processed);
+        Assert.Equal(1, task.InputCompletedCount);
+        Assert.All(task.Ended, e => Assert.Equal(RequestEnd.Processed, e.End));
+        Assert.False(downstream.Input.TryWrite(99));   // 下流の入力は閉じた
+        Assert.Null(downstream.Execution);             // 下流の Worker 自身は起動も完了もしていない
+        Assert.Equal(3, downstream.PendingCount);      // 出力は下流のキューに入っただけ
+    }
+
+    [Fact]
+    public async Task CompleteAsyncは未起動ならfalseを返し入力は閉じ後でStartすると残りを処理して完了する()
+    {
+        var task = new TestTask(4);
+        task.Input.TryWrite(1);
+        task.Input.TryWrite(2);
+
+        Assert.False(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+        Assert.Null(task.Execution);                   // 自動起動しない
+        Assert.False(task.Input.TryWrite(3));          // 入力は閉じた
+        Assert.Equal(2, task.PendingCount);
+
+        task.Start();
+        Assert.True(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+        Assert.Equal([1, 2], task.Processed);
+    }
+
+    [Fact]
+    public async Task CompleteAsyncは正常に完了済みのWorkerではすぐにtrueを返し実行は同じまま()
+    {
+        var task = new TestTask(4);
+        task.Start();
+        Assert.True(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+        var first = task.Execution;
+
+        Assert.True(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+
+        Assert.Same(first, task.Execution);
+        Assert.Equal(1, task.InputCompletedCount);
+    }
+
+    [Fact]
+    public async Task CompleteAsyncは完了を待つ間にFaultedになるとfalseを返し例外を投げない()
+    {
+        var boom = new InvalidOperationException("boom");
+        var task = new TestTask(4, (r, _) => r == 2 ? throw boom : ValueTask.CompletedTask);
+        for (int i = 1; i <= 3; i++) task.Input.TryWrite(i);
+        task.Start();
+
+        Assert.False(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+
+        Assert.Equal(TaskStatus.Faulted, task.Execution!.Status);
+        Assert.Same(boom, task.Execution.Exception!.InnerException);   // 原因は Execution で確かめる
+    }
+
+    [Fact]
+    public async Task CompleteAsyncは完了を待つ間にStopAsyncされるとfalseを返す()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = new TestTask(4, async (r, ct) =>
+        {
+            if (r != 1) return;
+            entered.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        });
+        task.Input.TryWrite(1);
+        task.Input.TryWrite(2);
+        task.Start();
+        await entered.Task.WaitAsync(Wait.Timeout);
+
+        var completing = task.CompleteAsync();   // ここでは await しない
+        await task.StopAsync();
+
+        Assert.False(await completing.WaitAsync(Wait.Timeout));
+        Assert.Equal(TaskStatus.Canceled, task.Execution!.Status);
+        Assert.Equal(1, task.PendingCount);      // 要求 2 はキューに残る
+    }
+
+    [Fact]
+    public async Task CompleteAsyncは停止済みのWorkerではすぐにfalseを返し入力を閉じる()
+    {
+        var task = new TestTask(4);
+        task.Start();
+        await task.StopAsync();
+        var stopped = task.Execution;
+
+        Assert.False(await task.CompleteAsync().WaitAsync(Wait.Timeout));
+
+        Assert.Same(stopped, task.Execution);
+        Assert.Equal(TaskStatus.Canceled, stopped!.Status);
+        Assert.False(task.Input.TryWrite(1));
+    }
+
+    [Fact]
+    public async Task CompleteAsyncが待つのは取得した実行だけで同時のRestartAsyncの後の実行は待たない()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = new TestTask(4, async (r, ct) =>
+        {
+            if (r != 1) return;
+            entered.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);   // 停止でキャンセル例外を投げる（要求 1 は処理されない）
+        });
+        for (int i = 1; i <= 3; i++) task.Input.TryWrite(i);
+        task.Start();
+        await entered.Task.WaitAsync(Wait.Timeout);
+        var old = task.Execution!;
+
+        var completing = task.CompleteAsync();   // old を取得し、入力を閉じる
+        await task.RestartAsync().WaitAsync(Wait.Timeout);
+
+        Assert.False(await completing.WaitAsync(Wait.Timeout));   // 判定したのは old（Canceled）
+        Assert.Equal(TaskStatus.Canceled, old.Status);
+        var restarted = task.Execution!;
+        Assert.NotSame(old, restarted);
+        await restarted.WaitAsync(Wait.Timeout);                  // 新しい実行は別に完了する（CompleteAsync はこれを待っていない）
+        Assert.Equal(TaskStatus.RanToCompletion, restarted.Status);
+        Assert.Equal([2, 3], task.Processed);
+    }
+
+    [Fact]
+    public async Task 同じ実行を待つ複数のCompleteAsyncはすべてtrueを返す()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = new TestTask(4, async (r, _) =>
+        {
+            if (r != 1) return;
+            entered.SetResult();
+            await release.Task;
+        });
+        task.Input.TryWrite(1);
+        task.Input.TryWrite(2);
+        task.Start();
+        await entered.Task.WaitAsync(Wait.Timeout);
+
+        var calls = Enumerable.Range(0, 4).Select(_ => task.CompleteAsync()).ToArray();
+        release.SetResult();
+        var results = await Task.WhenAll(calls).WaitAsync(Wait.Timeout);
+
+        Assert.All(results, Assert.True);
+        Assert.Equal(1, task.InputCompletedCount);
+        Assert.Equal([1, 2], task.Processed);
+    }
+
+    [Fact]
     public void 引数の検証は標準APIの例外に従う()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new TestTask(-1));

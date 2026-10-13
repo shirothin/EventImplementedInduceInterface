@@ -100,6 +100,29 @@ public abstract class EiiiWorker
     /// <summary>入力を閉じる。ワーカーは受理済みの要求をすべて処理してから正常終了する。閉じた入力は再び開けない。</summary>
     public abstract void CompleteInput();
 
+    /// <summary>
+    /// 入力を閉じ（<see cref="CompleteInput"/>）、呼び出した時点の実行（<see cref="Execution"/>）の終了を待つ。
+    /// その実行が正常終了（RanToCompletion）すれば true、それ以外（未起動、Faulted、Canceled）は false を返す。
+    /// </summary>
+    /// <remarks>
+    /// <para>状態の問い合わせではなく、正常な終了を要求するコマンドである。未起動でも入力は閉じる。Worker を起動はしない。
+    /// Worker の例外は再スローしない。原因は <see cref="Execution"/> で確かめる。</para>
+    /// <para>待つのは、<see cref="CompleteInput"/> より前に取得した実行だけである。同時に <see cref="StopAsync"/> / <see cref="RestartAsync"/> が
+    /// 行われた場合、その後に始まった実行の完了は待たず、保証もしない。</para>
+    /// <para>true は、対象の実行が入力を処理し終え、<c>OnInputCompletedAsync</c> を終え、下流の入力を閉じた（<c>LinkTo</c> で完了を伝播する場合）ことを表す。
+    /// 業務上の成功や、下流の Worker 自身の完了は表さない。false の場合、未処理の要求が残ることも、再実行されることも保証しない。</para>
+    /// <para>禁止事項: ワーカー内部から自身の <see cref="CompleteAsync"/> を await してはならない（自身の終了を自身で待つためデッドロックする）。</para>
+    /// </remarks>
+    /// <returns>対象の実行が正常終了したら true。</returns>
+    public async Task<bool> CompleteAsync()
+    {
+        var execution = Execution;   // 待つ対象と判定する対象を、この 1 つの Task に固定する
+        CompleteInput();
+        if (execution is null) return false;
+        await execution.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        return execution.Status == TaskStatus.RanToCompletion;
+    }
+
     /// <summary>ワーカー本体。<see cref="Start"/> が新しい実行を始めるごとに 1 回、スレッドプール上で実行される。</summary>
     /// <param name="cancellationToken"><see cref="StopAsync"/> で取り消されるトークン。</param>
     /// <returns>ワーカーの終了を表す Task。</returns>
