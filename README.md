@@ -15,7 +15,7 @@
 | 区分 | 内容 |
 |---|---|
 | 実装済み | ライブラリ本体（`src/Eiii`）、原型 Main の移植サンプル、通信シミュレーター（CR 終端方式・時間経過方式）、操作できるデモ（`Eiii.DemoConsole`） |
-| テスト | xUnit で 4 プロジェクト・計 152 件（原型の特性 11、ライブラリ 46、通信 83、デモ 12）。Release ではすべて成功。Debug では、通信 83 件のうち custom モード追加後の実行が Smart App Control の読み込み拒否により未検証（それ以前の 34 件は Debug でも成功） |
+| テスト | xUnit で 4 プロジェクト・計 207 件（原型の特性 11、ライブラリ 101、通信 83、デモ 12）。Release ではすべて成功。Debug では、通信 83 件のうち custom モード追加後の実行が Smart App Control の読み込み拒否により未検証（それ以前の 34 件は Debug でも成功） |
 | 未実装 | 一時停止（Pause / Resume）、Single 実行、実行報告（処理中の要求の記録）、再送や重複排除、Worker 間の依存関係の自動解析 |
 | 未検証 | 実際のキー入力による DemoConsole の全画面表示と操作（自動検証は標準入力による行単位表示のみ）。Windows 以外の OS |
 
@@ -24,8 +24,8 @@
 ## ディレクトリ構成
 
 ```
-/                         原型（2018 年版）のソース。変更しない。名前空間は EventImplementedInduceInterface
-├─ legacy/                原型をそのままビルドするためのプロジェクト（ソースはリンク参照のみ）
+/                         Eiii.slnx、README、LICENSE
+├─ legacy/                原型（2018 年版）のソースと、それをそのままビルドするプロジェクト。変更しない。名前空間は EventImplementedInduceInterface
 ├─ src/Eiii/              ライブラリ本体（名前空間 Eiii）
 ├─ samples/
 │  ├─ Eiii.Sample/        原型の Main を新しい API で移植したコンソールサンプル
@@ -147,7 +147,7 @@ dotnet test Eiii.slnx -c Release
 | テストプロジェクト | 件数 | 主な内容 |
 |---|---|---|
 | `Eiii.Legacy.Tests` | 11 | 原型の動作の記録（意図・欠陥・不明に分類） |
-| `Eiii.Tests` | 46 | 状態の観測、正常終了と停止、満杯時の動作、多重起動の防止、CTS の解放、Launcher と Callback、Registry |
+| `Eiii.Tests` | 101 | 状態の観測、正常終了と停止、満杯時の動作、多重起動の防止、CTS の解放、Launcher と Callback、Registry |
 | `Eiii.CommSim.Tests` | 83 | CR 終端と時間経過のフレーム確定、バックプレッシャー下でも受信時刻で判定されること、custom モード（引数・エスケープ・ファイル・分割） |
 | `Eiii.DemoConsole.Tests` | 12 | コマンドの直列化、無応答、誤分割や遅れた応答による取り違え、再起動、正常終了 |
 

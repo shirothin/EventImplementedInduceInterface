@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Phase 2 のライブラリ本体。原型（ルート直下）とは独立してビルドする。 -->
+  <!-- Phase 2 のライブラリ本体。legacy/ の原型とは独立してビルドする。 -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Eiii</RootNamespace>
