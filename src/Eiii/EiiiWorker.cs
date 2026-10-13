@@ -10,6 +10,11 @@ namespace Eiii;
 /// <para>中断: <see cref="StopAsync"/> はキャンセルによる中断である。取り出した要求は必ず処理（<c>ProcessAsync</c>）に渡され、
 /// 処理中だった要求をどう終えるかは処理の実装が決める（キャンセル例外で抜ければ、その要求は処理されないまま終わる）。
 /// まだ取り出していない要求は入力キューに残り、次の <see cref="Start"/> で受理順に処理される。</para>
+/// <para>終端: 正常終了（RanToCompletion）した Worker は、<see cref="Start"/> / <see cref="RestartAsync"/> を呼んでも再び実行しない
+/// （入力は閉じていて二度と開けないため）。Faulted / Canceled からは再び起動できる。</para>
+/// <para>生存責任: Worker を必要な期間生存させる責任は利用者にある。利用者は Worker またはその所有者への参照を保持すること。
+/// <see cref="Start"/> は Worker の生存を保証しない（外部から到達できなくなった実行中の Worker は、GC に回収され得る）。
+/// また、<see cref="StopAsync"/> による停止は、Worker が GC によって直ちに回収されることを保証しない。</para>
 /// <para>禁止事項: ワーカー内部（要求の処理中）から自身の <see cref="StopAsync"/> / <see cref="RestartAsync"/> を
 /// await してはならない。自身の終了を自身で待つためデッドロックする（検出はしない）。</para>
 /// </remarks>
@@ -49,13 +54,14 @@ public abstract class EiiiWorker
 
     /// <summary>
     /// ワーカーを起動する。実行中（停止処理中を含む）なら何もしない（多重起動しない）。
-    /// 実行の経過と結果は <see cref="Execution"/> で観測する。
+    /// 直前の実行が正常終了（RanToCompletion）していても何もしない（終端の状態。<see cref="Execution"/> は同じ Task のまま）。
+    /// Faulted / Canceled で終わった後は、新しい実行を始める。実行の経過と結果は <see cref="Execution"/> で観測する。
     /// </summary>
     public void Start()
     {
         lock (gate)
         {
-            if (current is { Execution.IsCompleted: false }) return;
+            if (current is { Execution: { IsCompleted: false } or { Status: TaskStatus.RanToCompletion } }) return;
             current = new Run(gate, RunAsync);
         }
     }
@@ -81,6 +87,7 @@ public abstract class EiiiWorker
     /// <summary>
     /// <see cref="StopAsync"/> で呼び出し時点の実行の終了を待ってから <see cref="Start"/> する。
     /// 完了した時点で、呼び出し時点の実行は終了しており、<see cref="Execution"/> はそれより後に開始された実行を指す。
+    /// ただし、呼び出し時点の実行が正常終了（RanToCompletion）していた場合は、<see cref="Start"/> と同じく新しい実行を始めない。
     /// 並行に呼ばれた場合、完了の順序は呼び出しの順序と一致するとは限らない。
     /// </summary>
     /// <returns>再起動の要求が終わったときに完了する Task。</returns>
@@ -93,7 +100,7 @@ public abstract class EiiiWorker
     /// <summary>入力を閉じる。ワーカーは受理済みの要求をすべて処理してから正常終了する。閉じた入力は再び開けない。</summary>
     public abstract void CompleteInput();
 
-    /// <summary>ワーカー本体。<see cref="Start"/> ごとに 1 回、スレッドプール上で実行される。</summary>
+    /// <summary>ワーカー本体。<see cref="Start"/> が新しい実行を始めるごとに 1 回、スレッドプール上で実行される。</summary>
     /// <param name="cancellationToken"><see cref="StopAsync"/> で取り消されるトークン。</param>
     /// <returns>ワーカーの終了を表す Task。</returns>
     protected abstract Task RunAsync(CancellationToken cancellationToken);

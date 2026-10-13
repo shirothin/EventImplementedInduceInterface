@@ -295,6 +295,107 @@ public class EiiiWorkerStateTests
     }
 
     [Fact]
+    public async Task 正常に完了した後のStartは何もせず同じ実行が残る()
+    {
+        var task = new TestTask(4);
+        task.Input.TryWrite(1);
+        task.Start();
+        task.CompleteInput();
+        var first = task.Execution!;
+        await first.WaitAsync(Wait.Timeout);
+
+        task.Start();
+        await task.Execution!.WaitAsync(Wait.Timeout);   // 新しい実行が始まっていれば、その終了まで待ってから数える
+
+        Assert.Same(first, task.Execution);
+        Assert.Equal(TaskStatus.RanToCompletion, first.Status);
+        Assert.False(task.IsRunning);
+        Assert.Equal(1, task.InputCompletedCount);
+        Assert.Equal(1, task.EnteredCount);
+        Assert.Single(task.Ended);
+        Assert.False(task.Input.TryWrite(2));   // 入力は閉じたまま
+    }
+
+    [Fact]
+    public async Task 正常に完了した後のRestartAsyncも新しい実行を始めない()
+    {
+        var task = new TestTask(4);
+        task.Input.TryWrite(1);
+        task.Start();
+        task.CompleteInput();
+        var first = task.Execution!;
+        await first.WaitAsync(Wait.Timeout);
+
+        await task.RestartAsync().WaitAsync(Wait.Timeout);
+        await task.Execution!.WaitAsync(Wait.Timeout);
+
+        Assert.Same(first, task.Execution);
+        Assert.Equal(TaskStatus.RanToCompletion, first.Status);
+        Assert.Equal(1, task.InputCompletedCount);
+        Assert.Equal(1, task.EnteredCount);
+        Assert.Single(task.Ended);
+    }
+
+    [Fact]
+    public async Task OnInputCompletedAsyncの例外でFaultedになった後は再開でき正常に完了した後は再開しない()
+    {
+        // Faulted からのやり直しは許可し、RanToCompletion は終端の状態にする（同じ Worker で境界を確かめる）
+        int calls = 0;
+        var task = new TestTask(4, onInputCompleted: _ =>
+            Interlocked.Increment(ref calls) == 1 ? throw new InvalidOperationException("flush") : ValueTask.CompletedTask);
+        task.CompleteInput();
+
+        task.Start();
+        await task.Execution!.ContinueWith(_ => { }, TaskScheduler.Default).WaitAsync(Wait.Timeout);
+        Assert.Equal(TaskStatus.Faulted, task.Execution.Status);
+        Assert.Equal(1, task.InputCompletedCount);
+
+        task.Start();
+        var completed = task.Execution!;
+        await completed.WaitAsync(Wait.Timeout);
+        Assert.Equal(TaskStatus.RanToCompletion, completed.Status);
+        Assert.Equal(2, task.InputCompletedCount);
+
+        task.Start();
+        await task.Execution!.WaitAsync(Wait.Timeout);
+
+        Assert.Same(completed, task.Execution);
+        Assert.Equal(2, task.InputCompletedCount);
+    }
+
+    [Fact]
+    public async Task 完了の前後に複数のスレッドからStartを呼んでも実行は最初の1本だけ()
+    {
+        // 補助試験: 競合が起きないことの証明ではなく、不変条件（実行は最初の 1 本だけ）を確率的に確かめる
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = new TestTask(4, async (_, _) => await release.Task);
+        task.Input.TryWrite(1);
+        task.Start();
+        var first = task.Execution!;   // 比較の基準は、テストの開始時に確保した最初の実行
+        task.CompleteInput();
+
+        using var stop = new CancellationTokenSource();
+        var callers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                task.Start();
+                Assert.Same(first, task.Execution);
+            }
+        })).ToArray();
+        await Task.Delay(50);
+        release.SetResult();   // 実行中に呼ばれた Start も、完了した後に呼ばれた Start も、同じ実行のまま
+        await first.WaitAsync(Wait.Timeout);
+        await Task.Delay(50);
+        stop.Cancel();
+        await Task.WhenAll(callers).WaitAsync(Wait.Timeout);
+
+        Assert.Same(first, task.Execution);
+        Assert.Equal(TaskStatus.RanToCompletion, first.Status);
+        Assert.Equal(1, task.InputCompletedCount);
+    }
+
+    [Fact]
     public void 引数の検証は標準APIの例外に従う()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new TestTask(-1));

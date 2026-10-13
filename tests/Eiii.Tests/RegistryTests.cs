@@ -170,4 +170,27 @@ public class RegistryTests
 
         for (int i = 0; i < 200; i++) Assert.NotNull(registry.Get<TestTask>($"w{i}"));
     }
+
+    [Fact]
+    public async Task CompleteAllAsyncの後にStartAllしても正常に完了したWorkerは再実行されない()
+    {
+        var registry = new EiiiWorkerRegistry();
+        var upstream = registry.Add("up", new TestTask(4));
+        var downstream = registry.Add("down", new TestTask(4));
+        upstream.LinkTo(downstream.Input);
+        upstream.Input.TryWrite(1);
+        registry.StartAll();
+        await registry.CompleteAllAsync().WaitAsync(Wait.Timeout);
+        var upFirst = upstream.Execution;
+        var downFirst = downstream.Execution;
+
+        registry.StartAll();
+        await registry.CompleteAllAsync().WaitAsync(Wait.Timeout);   // 再実行されていれば、その終了まで待ってから数える
+
+        Assert.Same(upFirst, upstream.Execution);
+        Assert.Same(downFirst, downstream.Execution);
+        Assert.Equal(1, upstream.InputCompletedCount);
+        Assert.Equal(1, downstream.InputCompletedCount);
+        Assert.Equal([10], downstream.Processed);
+    }
 }
