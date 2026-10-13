@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 
 namespace Eiii;
@@ -102,6 +103,29 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     protected virtual ValueTask OnInputCompletedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
 
     /// <summary>
+    /// <see cref="ProcessAsync"/> に渡した要求 1 件の終わり方を通知する。<see cref="ProcessAsync"/> の呼び出しごとに一度だけ呼ばれる。
+    /// キューに残った要求と、<see cref="OnInputCompletedAsync"/> については呼ばれない。
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="ProcessAsync"/> が終わった後、実行ループの中で同期的に呼び出される。フックが戻るまで、次の要求の処理は始まらない。
+    /// その要求の処理中に出力した値の callback は、この時点ですべて済んでいる。</para>
+    /// <para><see cref="RequestEnd.Processed"/> は <see cref="ProcessAsync"/> が return したことだけを表し、業務上の成功は表さない。
+    /// 停止以外のキャンセル例外と停止要求が同時に起きた場合は、捕捉した時点で停止が要求されていれば <see cref="RequestEnd.Stopped"/> になる。
+    /// 分類と Worker の終了状態（Processed・Stopped なら継続または Canceled、Failed なら Faulted）は一致する。</para>
+    /// <para>Eiii が保証するのは、このメソッドを一度呼ぶことまでである。通知を受け取って記録できたかどうかは利用者の責務とする。
+    /// 「受理した数 = 通知の数 + PendingCount」は、フックが正常に戻り、実行の終了後に投入も再 Start もなく、呼び出しを漏れなく数えた場合に成り立つ。</para>
+    /// <para>このメソッドが例外を投げると、Worker は Faulted になる。例外は <see cref="InvalidOperationException"/> に包まれ、メッセージに通知の種類が入る。
+    /// <see cref="RequestEnd.Failed"/> の通知で失敗した場合は、処理の例外と包んだ例外の両方を持つ <see cref="AggregateException"/> になる
+    /// （確認は <c>Execution.Exception.Flatten().InnerExceptions</c> で行う）。同じ要求への再通知や、<see cref="ProcessAsync"/> の再実行はしない。</para>
+    /// <para>禁止事項: このメソッドから自身の <see cref="EiiiWorker.StopAsync"/> / <see cref="EiiiWorker.RestartAsync"/> を待ってはならない（デッドロックする）。
+    /// <see cref="EmitAsync"/> の呼び出しはサポートしない（フックの終了時点で、非同期の出力の完了を保証できないため）。出力は <see cref="ProcessAsync"/> の中で行う。</para>
+    /// </remarks>
+    /// <param name="request">終わった要求。</param>
+    /// <param name="ending">終わり方。</param>
+    /// <param name="exception"><see cref="ProcessAsync"/> から出た元の例外（包む前のもの）。<see cref="RequestEnd.Processed"/> なら null。</param>
+    protected virtual void OnRequestEnded(TIn request, RequestEnd ending, Exception? exception) { }
+
+    /// <summary>
     /// 出力を下流へ渡し（満杯なら空きが出るまで待つ）、続いてコールバックを呼ぶ。
     /// コールバックは、出力が下流の Channel に受理されたこと（下流が未接続なら出力が生成されたこと）を示す。下流での処理の完了は保証しない。
     /// 下流もコールバックもない場合、出力はどこにも渡されない。
@@ -129,7 +153,7 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!reader.TryRead(out var request)) break;
-                    await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
+                    await ProcessAndNotifyAsync(request, cancellationToken).ConfigureAwait(false);
                 }
             }
             await OnInputCompletedAsync(cancellationToken).ConfigureAwait(false);
@@ -139,7 +163,50 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
         {
             // async メソッドから OCE が出ると、発生源にかかわらず Task は Canceled になる。Canceled を StopAsync による停止だけに限るため、
             // 捕捉した時点で停止が要求されていなければ Faulted にする（OCE の発生源は識別しない。元の OCE は InnerException に残す）
-            throw new InvalidOperationException("Worker の停止以外のキャンセルで処理が終了した。", ex);
+            throw NonStopCancellation(ex);
         }
     }
+
+    /// <summary>
+    /// 要求を 1 件処理し、その終わり方を <see cref="OnRequestEnded"/> で一度だけ通知してから、Worker の終了につながる例外を伝える。
+    /// フックに渡す元の例外（error）と、Worker が投げる例外（fault）を分ける。
+    /// </summary>
+    private async Task ProcessAndNotifyAsync(TIn request, CancellationToken cancellationToken)
+    {
+        RequestEnd end;
+        Exception? error = null;
+        Exception? fault = null;
+        try
+        {
+            await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
+            end = RequestEnd.Processed;
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            end = RequestEnd.Stopped;
+            error = fault = ex;
+        }
+        catch (Exception ex)
+        {
+            end = RequestEnd.Failed;
+            error = ex;
+            // Failed と判定した OCE は、その場で包む。外側で包むと、通知の後に停止が割り込んだとき Canceled になり、通知と食い違う
+            fault = ex is OperationCanceledException ? NonStopCancellation(ex) : ex;
+        }
+
+        try
+        {
+            OnRequestEnded(request, end, error);   // 処理本体の try の外で呼ぶ（フックの失敗を処理の失敗として二重に通知しない）
+        }
+        catch (Exception hookEx)   // OCE も含めて包む（包まないと Canceled に紛れる）
+        {
+            var wrapped = new InvalidOperationException($"OnRequestEnded({end}) が例外を投げた。", hookEx);
+            throw end == RequestEnd.Failed ? new AggregateException(fault!, wrapped) : wrapped;
+        }
+
+        if (fault is not null) ExceptionDispatchInfo.Throw(fault);
+    }
+
+    private static InvalidOperationException NonStopCancellation(Exception cancellation)
+        => new("Worker の停止以外のキャンセルで処理が終了した。", cancellation);
 }

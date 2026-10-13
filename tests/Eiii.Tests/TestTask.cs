@@ -5,9 +5,12 @@ namespace Eiii.Tests;
 
 /// <summary>要求 r を処理すると r を記録し、r * 10 を出力するテスト用タスク。ハンドラーの同時実行数も記録する。</summary>
 internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueTask>? onRequest = null, TaskToCallback<int>? callback = null,
-                               Func<CancellationToken, ValueTask>? onInputCompleted = null)
+                               Func<CancellationToken, ValueTask>? onInputCompleted = null, Action<int, RequestEnd, Exception?>? onEnded = null)
     : EiiiWorker<int, int>(capacity, callback)
 {
+    /// <summary>OnRequestEnded の呼び出しの記録（呼ばれた順）。フックが例外を投げる場合も、投げる前に記録する。</summary>
+    public ConcurrentQueue<(int Request, RequestEnd End, Exception? Error)> Ended { get; } = new();
+
     private int concurrent;
     private int maxConcurrent;
 
@@ -40,6 +43,12 @@ internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueT
     {
         Interlocked.Increment(ref InputCompletedCount);
         return onInputCompleted?.Invoke(cancellationToken) ?? ValueTask.CompletedTask;
+    }
+
+    protected override void OnRequestEnded(int request, RequestEnd ending, Exception? exception)
+    {
+        Ended.Enqueue((request, ending, exception));
+        onEnded?.Invoke(request, ending, exception);
     }
 }
 
