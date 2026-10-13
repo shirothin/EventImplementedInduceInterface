@@ -183,4 +183,4 @@ dotnet run --project samples/Eiii.CommSim -- custom --help
 - `DelimiterFramer` と `TimeoutFramer` の単体テスト：時刻は合成値を渡すので、実時間に依存しません。閾値ちょうど（249 / 250ms）の境界、誤分割、Overflow、NoResponse を確認します。
 - 結合テスト（実時間）：Receiver と Parser の独立性、バックプレッシャー、停止と正常終了の違い、キューで待たされても受信時刻で判定されること。
 - `custom` モード（49 件）：エスケープ表記の解釈と誤り、引数の解析と誤り（16 通り）、分割位置・間欠の明示と乱数の再現性、ファイルの読み込み（CR / LF / CRLF の保持、UTF-8 の BOM、不正なバイト、空のファイル）、3 方式の比較の実行。
-- 実行結果：Release 構成で 83 件すべて成功。Debug 構成では、`custom` モードを追加した後のビルドで `Eiii.Comm.dll` の読み込みが Smart App Control に拒否されたため、**Debug での実行は未検証**です（失敗として集計された 52 件は、いずれも読み込み拒否による `FileLoadException` でした）。
+- 実行結果：Debug / Release 構成とも 83 件すべて成功（2026-10-14）。
