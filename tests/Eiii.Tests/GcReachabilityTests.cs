@@ -74,6 +74,25 @@ public class GcReachabilityTests(ITestOutputHelper output)
         return new WeakReference(task);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Worker, System.Threading.Channels.ChannelWriter<int> Writer) CreateRunningIdleWorkerKeepingWriter()
+    {
+        var task = new TestTask(4);
+        task.Start();
+        task.Input.TryWrite(1);
+        Wait.UntilAsync(() => task.Processed.Count == 1).GetAwaiter().GetResult();
+        Thread.Sleep(100);
+        return (new WeakReference(task), task.Input);   // 外部には入力口（ChannelWriter）だけを残す
+    }
+
+    [Fact]
+    public void 実行中でChannelの読み出しを待っていて外部がChannelWriterだけを持つWorker()
+    {
+        var (weak, writer) = CreateRunningIdleWorkerKeepingWriter();
+        Report("4. 実行中（Channel の読み出し待ち）・外部は ChannelWriter だけを保持", AliveAfterFullGc(weak));
+        GC.KeepAlive(writer);
+    }
+
     [Fact]
     public void 停止済みで外部参照のないWorker()
     {
