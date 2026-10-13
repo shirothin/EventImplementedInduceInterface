@@ -52,6 +52,13 @@ internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueT
     }
 }
 
+/// <summary>string を受けて長さ（int）を出力する。"boom" で例外を投げる。</summary>
+internal sealed class LengthTask(int capacity) : EiiiWorker<string, int>(capacity)
+{
+    protected override ValueTask ProcessAsync(string request, CancellationToken cancellationToken)
+        => request == "boom" ? throw new InvalidOperationException("boom") : EmitAsync(request.Length, cancellationToken);
+}
+
 /// <summary>CTS の解放を検証するため、非公開の実行（Run）とその disposed フラグをリフレクションで読む（テスト専用）。</summary>
 internal static class RunInspector
 {
