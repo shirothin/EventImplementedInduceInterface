@@ -4,7 +4,8 @@ using Eiii;
 namespace Eiii.Tests;
 
 /// <summary>要求 r を処理すると r を記録し、r * 10 を出力するテスト用タスク。ハンドラーの同時実行数も記録する。</summary>
-internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueTask>? onRequest = null, TaskToCallback<int>? callback = null)
+internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueTask>? onRequest = null, TaskToCallback<int>? callback = null,
+                               Func<CancellationToken, ValueTask>? onInputCompleted = null)
     : EiiiWorker<int, int>(capacity, callback)
 {
     private int concurrent;
@@ -38,7 +39,7 @@ internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueT
     protected override ValueTask OnInputCompletedAsync(CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref InputCompletedCount);
-        return ValueTask.CompletedTask;
+        return onInputCompleted?.Invoke(cancellationToken) ?? ValueTask.CompletedTask;
     }
 }
 

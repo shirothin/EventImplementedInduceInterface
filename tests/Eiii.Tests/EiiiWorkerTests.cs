@@ -228,6 +228,61 @@ public class EiiiWorkerStateTests
     }
 
     [Fact]
+    public async Task ProcessAsyncの停止以外のキャンセル例外はInvalidOperationExceptionに包まれFaultedになる()
+    {
+        using var other = new CancellationTokenSource();   // Worker とは無関係のトークン（要求ごとのキャンセルを模す）
+        other.Cancel();
+        var thrown = new OperationCanceledException(other.Token);
+        var task = new TestTask(4, (_, _) => throw thrown);
+        task.Input.TryWrite(1);
+
+        task.Start();
+        await task.Execution!.ContinueWith(_ => { }, TaskScheduler.Default).WaitAsync(Wait.Timeout);
+
+        Assert.Equal(TaskStatus.Faulted, task.Execution.Status);
+        var wrapped = Assert.IsType<InvalidOperationException>(task.Execution.Exception!.InnerException);
+        Assert.Same(thrown, wrapped.InnerException);   // 元の OCE を失わない
+    }
+
+    [Fact]
+    public async Task OnInputCompletedAsyncの停止以外のキャンセル例外もInvalidOperationExceptionに包まれFaultedになる()
+    {
+        using var other = new CancellationTokenSource();
+        other.Cancel();
+        var thrown = new OperationCanceledException(other.Token);
+        var task = new TestTask(4, onInputCompleted: _ => throw thrown);
+        task.CompleteInput();
+
+        task.Start();
+        await task.Execution!.ContinueWith(_ => { }, TaskScheduler.Default).WaitAsync(Wait.Timeout);
+
+        Assert.Equal(TaskStatus.Faulted, task.Execution.Status);
+        var wrapped = Assert.IsType<InvalidOperationException>(task.Execution.Exception!.InnerException);
+        Assert.Same(thrown, wrapped.InnerException);
+    }
+
+    [Fact]
+    public async Task 停止以外のキャンセル例外でFaultedになった後も再Startで続きを受理順に処理する()
+    {
+        using var other = new CancellationTokenSource();
+        other.Cancel();
+        var task = new TestTask(4, (r, _) => r == 2 ? throw new OperationCanceledException(other.Token) : ValueTask.CompletedTask);
+        for (int i = 1; i <= 4; i++) task.Input.TryWrite(i);
+
+        task.Start();
+        await task.Execution!.ContinueWith(_ => { }, TaskScheduler.Default).WaitAsync(Wait.Timeout);
+        Assert.Equal(TaskStatus.Faulted, task.Execution.Status);
+        Assert.Equal(2, task.PendingCount);
+
+        task.Start();
+        task.CompleteInput();
+        await task.Execution!.WaitAsync(Wait.Timeout);
+
+        Assert.Equal(TaskStatus.RanToCompletion, task.Execution.Status);
+        Assert.Equal([1, 3, 4], task.Processed);   // 2 は処理中に例外で終わったため処理されない（再実行もされない）
+    }
+
+    [Fact]
     public async Task CompleteInput後にStartするとすぐRanToCompletionになる()
     {
         var task = new TestTask(4);

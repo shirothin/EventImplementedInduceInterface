@@ -121,16 +121,25 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
         // ReadAllAsync は次の要素を取り出してから yield するため、その後でキャンセルを確認すると取り出した要求を捨ててしまう。
         // 停止の確認は取り出す前に行い、取り出した要求は必ず ProcessAsync に渡す（確認と取り出しの間に停止が割り込めば、取り消し済みのトークンで渡る）
         var reader = channel.Reader;
-        while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+        try
         {
-            while (true)
+            while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!reader.TryRead(out var request)) break;
-                await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!reader.TryRead(out var request)) break;
+                    await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
+                }
             }
+            await OnInputCompletedAsync(cancellationToken).ConfigureAwait(false);
+            downstream?.TryComplete();
         }
-        await OnInputCompletedAsync(cancellationToken).ConfigureAwait(false);
-        downstream?.TryComplete();
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // async メソッドから OCE が出ると、発生源にかかわらず Task は Canceled になる。Canceled を StopAsync による停止だけに限るため、
+            // 捕捉した時点で停止が要求されていなければ Faulted にする（OCE の発生源は識別しない。元の OCE は InnerException に残す）
+            throw new InvalidOperationException("Worker の停止以外のキャンセルで処理が終了した。", ex);
+        }
     }
 }

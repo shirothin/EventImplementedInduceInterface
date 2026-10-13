@@ -24,6 +24,12 @@ public abstract class EiiiWorker
     /// （<see cref="Task.Run(Func{Task})"/> が返す代理 Task のため Running にはならない）。
     /// 終了後は RanToCompletion（正常終了）、Canceled（<see cref="StopAsync"/>）、Faulted（例外。原因は <see cref="Task.Exception"/>）。
     /// </summary>
+    /// <remarks>
+    /// Canceled は <see cref="StopAsync"/> による停止を表す。<c>ProcessAsync</c> または <c>OnInputCompletedAsync</c> から
+    /// <see cref="OperationCanceledException"/> が出たとき、その時点で停止が要求されていなければ、<see cref="InvalidOperationException"/> に包まれ
+    /// （<see cref="Exception.InnerException"/> に元の例外が入る）、Faulted になる。停止が要求されていれば Canceled になる。
+    /// 分類は停止要求の有無で決まり、OCE が何によって発生したかは識別しない。
+    /// </remarks>
     public Task? Execution
     {
         get
