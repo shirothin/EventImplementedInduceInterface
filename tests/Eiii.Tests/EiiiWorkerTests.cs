@@ -46,7 +46,7 @@ public class EiiiWorkerStateTests
     }
 
     [Fact]
-    public async Task StopAsyncでCanceledになり未読の要求は残って再Startで処理され処理中の1件は失われる()
+    public async Task StopAsyncでCanceledになり未読の要求は残って再Startで処理されキャンセル例外を投げた処理中の1件は失われる()
     {
         var entered = new TaskCompletionSource();
         var task = new TestTask(8, async (r, ct) =>
@@ -71,6 +71,140 @@ public class EiiiWorkerStateTests
         await task.Execution!.WaitAsync(Wait.Timeout);
 
         Assert.Equal([2, 3, 4, 5], task.Processed);   // 1 は処理中に中断されたため失われた（文書化された動作）
+    }
+
+    [Fact]
+    public async Task 停止後に正常にreturnする実装でもキュー待ちの要求は失われず再Startで受理順に処理される()
+    {
+        // HeavyWorkModel 型（停止を内部で処理して正常に return する）の処理で、
+        // 停止の直後に次の要求が取り出されて捨てられないことを確かめる。下流はつながない（EmitAsync が ct を使わないため）
+        var opts = TaskCreationOptions.RunContinuationsAsynchronously;
+        TaskCompletionSource entered = new(opts), cancelRequested = new(opts), release = new(opts);
+        var task = new TestTask(8, async (r, ct) =>
+        {
+            if (r != 1) return;
+            using var registration = ct.Register(() => cancelRequested.TrySetResult());
+            entered.SetResult();
+            await release.Task;   // ct を無視し、解放されたら正常に return する
+        });
+        for (int i = 1; i <= 5; i++) Assert.True(task.Input.TryWrite(i));
+        task.Start();
+        await entered.Task.WaitAsync(Wait.Timeout);
+
+        var stopping = task.StopAsync();   // ここでは await しない（要求 1 の復帰を待ってデッドロックするため）
+        await cancelRequested.Task.WaitAsync(Wait.Timeout);
+        release.SetResult();
+        await stopping.WaitAsync(Wait.Timeout);
+
+        Assert.True(stopping.IsCompletedSuccessfully);
+        var previousExecution = task.Execution!;
+        var afterStop = $"停止後: {previousExecution.Status}, Processed=[{string.Join(",", task.Processed)}], PendingCount={task.PendingCount}";
+
+        task.Start();
+        var restartedExecution = task.Execution;
+        Assert.NotSame(previousExecution, restartedExecution);
+        task.CompleteInput();
+        await restartedExecution!.WaitAsync(Wait.Timeout);
+        var afterRestart = $"再開後: {restartedExecution.Status}, Processed=[{string.Join(",", task.Processed)}]";
+
+        // 消失・件数・順序をまとめて比べる（途中で止めず、失敗時にすべての観測値を表示するため）
+        const string expected = "停止後: Canceled, Processed=[1], PendingCount=4 / 再開後: RanToCompletion, Processed=[1,2,3,4,5]";
+        var actual = $"{afterStop} / {afterRestart}";
+        Assert.True(actual == expected, $"\n期待: {expected}\n実際: {actual}");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task 停止後は受理した数が処理に入った数とPendingCountの和に一致する(bool returnNormallyOnStop)
+    {
+        // 停止時の終わり方（正常に return する / キャンセル例外を投げる）によらず、受理した要求は「処理に入った」か「キューに残る」のどちらか
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = new TestTask(8, async (r, ct) =>
+        {
+            if (r != 1) return;
+            entered.SetResult();
+            try { await Task.Delay(Timeout.Infinite, ct); }
+            catch (OperationCanceledException) when (returnNormallyOnStop) { }
+        });
+        int accepted = 0;
+        for (int i = 1; i <= 5; i++) if (task.Input.TryWrite(i)) accepted++;
+        task.Start();
+        await entered.Task.WaitAsync(Wait.Timeout);
+
+        await task.StopAsync();   // 検証は停止の完了後、投入も再 Start もしていない時点で行う
+
+        Assert.Equal(5, accepted);
+        Assert.Equal(1, task.EnteredCount);
+        Assert.Equal(accepted, task.EnteredCount + task.PendingCount);
+    }
+
+    [Fact]
+    public async Task 起動直後または待機中に停止してもCanceledになり要求は失われない()
+    {
+        // キューが空の状態での停止。待機に入ったことは外から観測できないため、待機に入る前に停止する場合も含む
+        var task = new TestTask(4);
+        task.Start();
+
+        await task.StopAsync();
+
+        Assert.Equal(TaskStatus.Canceled, task.Execution!.Status);
+        Assert.Equal(0, task.EnteredCount);
+        Assert.Equal(0, task.PendingCount);
+        Assert.Empty(task.Processed);
+    }
+
+    [Fact]
+    public async Task 停止後に受理した要求はキューに残り再Startで受理順に処理される()
+    {
+        var task = new TestTask(4);
+        task.Start();
+        await task.StopAsync();
+
+        for (int i = 1; i <= 3; i++) Assert.True(task.Input.TryWrite(i));
+        Assert.Equal(3, task.PendingCount);
+        Assert.Equal(0, task.EnteredCount);
+
+        task.Start();
+        task.CompleteInput();
+        await task.Execution!.WaitAsync(Wait.Timeout);
+
+        Assert.Equal(TaskStatus.RanToCompletion, task.Execution.Status);
+        Assert.Equal([1, 2, 3], task.Processed);
+    }
+
+    [Fact]
+    public async Task 停止と再起動を繰り返しても要求は失われず受理順に処理される()
+    {
+        // 停止後に正常に return する処理で Stop と Start を繰り返す。1 回の起動ごとに、処理に入った 1 件だけが処理される
+        const int cycles = 5;
+        const int total = 15;
+        var entered = new SemaphoreSlim(0);
+        var blocking = true;
+        var task = new TestTask(16, async (_, ct) =>
+        {
+            if (!Volatile.Read(ref blocking)) return;
+            entered.Release();
+            try { await Task.Delay(Timeout.Infinite, ct); }
+            catch (OperationCanceledException) { }   // 停止を内部で処理して正常に return する（HeavyWorkModel 型）
+        });
+        for (int i = 1; i <= total; i++) Assert.True(task.Input.TryWrite(i));
+
+        for (int c = 0; c < cycles; c++)
+        {
+            task.Start();
+            Assert.True(await entered.WaitAsync(Wait.Timeout));
+            await task.StopAsync();
+            Assert.Equal(total, task.Processed.Count + task.PendingCount);   // 停止のたびに保存則が成り立つ
+        }
+
+        Volatile.Write(ref blocking, false);
+        task.Start();
+        task.CompleteInput();
+        await task.Execution!.WaitAsync(Wait.Timeout);
+
+        Assert.Equal(TaskStatus.RanToCompletion, task.Execution.Status);
+        Assert.Equal(Enumerable.Range(1, total), task.Processed);
     }
 
     [Fact]

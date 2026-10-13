@@ -7,8 +7,9 @@ namespace Eiii;
 /// </summary>
 /// <remarks>
 /// <para>正常終了: <c>CompleteInput</c> で入力を閉じると、受理済みの要求をすべて処理してから終了する。</para>
-/// <para>中断: <see cref="StopAsync"/> はキャンセルによる中断であり、処理中だった要求は失われ得る。
-/// まだ読み出していない要求は入力キューに残り、次の <see cref="Start"/> で処理される。</para>
+/// <para>中断: <see cref="StopAsync"/> はキャンセルによる中断である。取り出した要求は必ず処理（<c>ProcessAsync</c>）に渡され、
+/// 処理中だった要求をどう終えるかは処理の実装が決める（キャンセル例外で抜ければ、その要求は処理されないまま終わる）。
+/// まだ取り出していない要求は入力キューに残り、次の <see cref="Start"/> で受理順に処理される。</para>
 /// <para>禁止事項: ワーカー内部（要求の処理中）から自身の <see cref="StopAsync"/> / <see cref="RestartAsync"/> を
 /// await してはならない。自身の終了を自身で待つためデッドロックする（検出はしない）。</para>
 /// </remarks>

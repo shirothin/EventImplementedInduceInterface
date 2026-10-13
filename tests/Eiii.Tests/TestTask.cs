@@ -14,8 +14,12 @@ internal sealed class TestTask(int capacity, Func<int, CancellationToken, ValueT
     public int MaxConcurrent => Volatile.Read(ref maxConcurrent);
     public int InputCompletedCount;
 
+    /// <summary>ProcessAsync に入った回数（キャンセル例外で中断した要求も含む）。</summary>
+    public int EnteredCount;
+
     protected override async ValueTask ProcessAsync(int request, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref EnteredCount);
         var now = Interlocked.Increment(ref concurrent);
         int seen;
         while (now > (seen = Volatile.Read(ref maxConcurrent)) && Interlocked.CompareExchange(ref maxConcurrent, now, seen) != seen) { }

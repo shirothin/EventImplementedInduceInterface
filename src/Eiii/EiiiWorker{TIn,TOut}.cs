@@ -85,6 +85,12 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     private void OnEvent(object sender, EiiiEventArgs<TIn> e) => e.Accepted = channel.Writer.TryWrite(e.Value);
 
     /// <summary>要求を 1 件処理する（原型 <c>eventFunc</c> に相当）。ワーカー上で 1 件ずつ呼ばれる。</summary>
+    /// <remarks>
+    /// ワーカーが入力キューから取り出した要求は、停止要求の有無にかかわらず、このメソッドに一度だけ渡される。
+    /// 停止要求と競合した場合は、取り消し済みの <paramref name="cancellationToken"/> が渡されることがある。
+    /// このメソッドの入口で <see cref="CancellationToken.IsCancellationRequested"/> を確認すると、その時点で停止が要求されているかを判別できる。
+    /// 処理を続けるか中断するかは、このメソッドが決める。キューに残った要求は、再 Start されるまで処理されない。
+    /// </remarks>
     /// <param name="request">入力キューから読み出した要求。</param>
     /// <param name="cancellationToken"><see cref="EiiiWorker.StopAsync"/> で取り消されるトークン。</param>
     /// <returns>処理の完了を表す ValueTask。</returns>
@@ -112,10 +118,17 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     /// <inheritdoc/>
     protected sealed override async Task RunAsync(CancellationToken cancellationToken)
     {
-        await foreach (var request in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        // ReadAllAsync は次の要素を取り出してから yield するため、その後でキャンセルを確認すると取り出した要求を捨ててしまう。
+        // 停止の確認は取り出す前に行い、取り出した要求は必ず ProcessAsync に渡す（確認と取り出しの間に停止が割り込めば、取り消し済みのトークンで渡る）
+        var reader = channel.Reader;
+        while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            cancellationToken.ThrowIfCancellationRequested();   // ReadAllAsync は要素が続く間キャンセルを確認しない
-            await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!reader.TryRead(out var request)) break;
+                await ProcessAsync(request, cancellationToken).ConfigureAwait(false);
+            }
         }
         await OnInputCompletedAsync(cancellationToken).ConfigureAwait(false);
         downstream?.TryComplete();
