@@ -50,6 +50,14 @@ public sealed class EiiiWorkerRegistry
         lock (gate) return (TWorker)workers[name];
     }
 
+    /// <summary>
+    /// 登録済みのすべてのワーカーを、登録順のスナップショットとして返す（原型 GetAll）。
+    /// 呼び出すたびに新しい一覧を作り、Registry はそれを保持しない。後から <see cref="Add"/> しても、取得済みの一覧は変わらない。
+    /// </summary>
+    /// <remarks>登録順は依存関係の順序を意味しない。起動・停止・完了の順序は、利用者が接続の構成に合わせて決める。</remarks>
+    /// <returns>登録順のワーカーの一覧。</returns>
+    public IReadOnlyList<EiiiWorker> GetAll() => Snapshot();
+
     /// <summary>登録済みのすべてのワーカーを、登録の逆順（下流から）に起動する。実行中のワーカーには何もしない。</summary>
     public void StartAll()
     {

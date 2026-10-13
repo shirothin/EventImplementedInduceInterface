@@ -51,7 +51,7 @@
 | `EiiiEventArgs<T>` | 要求の値（`Value`）と、受信側が書き戻す受理結果（`Accepted`） |
 | `EventHandler<TSender, TEventArgs>` | 原型から引き継いだ独自のデリゲート（比較学習のため維持） |
 | `TaskToCallback<TOut>` | 出力を観測するコールバック。Worker のスレッドで同期的に呼ばれる |
-| `EiiiWorkerRegistry` | 入出力型の異なる Worker を名前で登録・取得し、一括で起動・停止・正常終了する |
+| `EiiiWorkerRegistry` | 入出力型の異なる Worker を名前で登録・取得し、登録順に列挙する（起動・停止・完了の順序は利用者が決める） |
 
 ### 要求から結果までの流れ
 
@@ -88,7 +88,7 @@ sequenceDiagram
 - **状態は実際の Task で観測する。** 実行中の `Execution.Status` は `Running` ではなく `WaitingForActivation` です（`Task.Run(Func<Task>)` が返す代理 Task のため）。判定には `IsRunning`（未完了なら true）を使います。終了後は `RanToCompletion`（正常終了）、`Canceled`（停止）、`Faulted`（例外。原因は `Exception`）になります。
 - **正常終了と停止は別物。** `CompleteInput` は入力を閉じ、受理済みの要求をすべて処理してから終わり、`LinkTo` 先にも完了を伝えます。`StopAsync` はキャンセルによる中断で、**処理中だった 1 件は失われ得ます**。まだ読み出していない要求は Channel に残り、次の `Start` で処理されます。
 - **多重起動しない。** `Start` は実行中なら何もしません。CTS は実行ごとに作り、取消（`CancelAsync`）と破棄を同じ lock の中で行います。破棄は、実行とキャンセルコールバックの両方が終わった時点で 1 回だけです（テストで確認済み）。
-- **Registry は便宜機能。** 一括操作は「一直線に接続し、上流から順に登録した構成」でだけ正しい順序になります。依存関係の解析はしません。
+- **Registry は名簿。** 登録・取得・列挙（`GetAll` は登録順のスナップショット）だけを行います。登録順は依存関係の順序を意味しません。起動・停止・完了の順序は、接続の構成に合わせて利用者が Worker ごとに決めます（直列なら、起動は下流から、`StopAsync` / `CompleteAsync` は上流から 1 つずつ）。
 
 ### 最小の使用例
 

@@ -9,7 +9,8 @@ namespace Eiii.CommSim;
 /// 通常のコマンド応答（CR 終端）はデリミタ方式（A～C）: Device → Receiver（string → Frame）→ Parser（Frame → Reading）。
 /// OSD 取得などの終端マーカーのない応答は時間方式（D～G）: Device → TimedReceiver（RxInput → TimedFrame）→ OsdParser。
 /// コマンドの種類に応じた方式の選択、Worker 間の接続（LinkTo）、実行順序はアプリケーション（このクラス）の責務で、
-/// Registry は登録と一括の寿命管理だけに使う。ライブラリ本体は通信の知識を持たない。
+/// 起動・停止・完了の順序も、このクラスが Worker ごとに明示する（受信 → 解析の直列なので、起動は下流から、停止と完了は上流から 1 つずつ）。
+/// ライブラリ本体は通信の知識を持たない。
 /// </summary>
 internal static class Program
 {
@@ -88,18 +89,18 @@ internal static class Program
     {
         var time = TimeProvider.System;
         var results = new ConcurrentQueue<OsdResponse>();
-        var registry = new EiiiWorkerRegistry();
-        var receiver = registry.Add("osd-receiver", new TimedReceiverTask(256, new TimeoutFramer(options),
+        var receiver = new TimedReceiverTask(256, new TimeoutFramer(options),
             new TaskToCallback<TimedFrame>(frame => Log.Write("receiver",
                 $"フレーム確定 [{frame.End}] 長さ={frame.Text.Length}" +
-                (frame.FirstReceivedAt is { } first ? $" 最初→最後の受信={(frame.LastReceivedAt!.Value - first).TotalMilliseconds:0}ms" : "")))));
-        var parser = registry.Add("osd-parser", new OsdParserTask(4, callback: new TaskToCallback<OsdResponse>(r =>
+                (frame.FirstReceivedAt is { } first ? $" 最初→最後の受信={(frame.LastReceivedAt!.Value - first).TotalMilliseconds:0}ms" : ""))));
+        var parser = new OsdParserTask(4, callback: new TaskToCallback<OsdResponse>(r =>
         {
             results.Enqueue(r);
             Log.Write("parser", $"OSD 応答 [{r.End}] 行数={r.Lines.Count} 長さ={r.Length}（終端マーカーがないため完全性は未保証）");
-        })));
+        }));
         receiver.LinkTo(parser.Input);
-        registry.StartAll();
+        parser.Start();   // 起動は下流から
+        receiver.Start();
 
         using var ticking = new CancellationTokenSource();
         var ticks = TickSource.RunAsync(receiver.Input, TimeSpan.FromMilliseconds(25), time, ticking.Token);
@@ -120,7 +121,8 @@ internal static class Program
 
         await ticking.CancelAsync();
         await ticks;
-        await registry.CompleteAllAsync();
+        await receiver.CompleteAsync();   // 完了は上流から（下流の入力も CompleteAsync が閉じる）
+        await parser.CompleteAsync();
         return [.. results];
     }
 
@@ -128,12 +130,14 @@ internal static class Program
     private static async Task NormalCompletionAsync()
     {
         Log.Header("A. 正常終了（チャンク分割・区切り文字の境界またぎ・末尾の未確定データ）");
-        var (registry, receiver, parser, readings) = Build(receiverCapacity: 8, parserCapacity: 4, parseTime: TimeSpan.FromMilliseconds(50));
-        registry.StartAll();
+        var (receiver, parser, readings) = Build(receiverCapacity: 8, parserCapacity: 4, parseTime: TimeSpan.FromMilliseconds(50));
+        parser.Start();   // 起動は下流から
+        receiver.Start();
 
         await SendAsync(receiver.Input, ["TEMP=2", "3.5\r", "\nHUM=4", "0\r\nPRES=10", "13\r\nTAIL=7"], TraceSend);
-        Log.Write("main", "CompleteAllAsync（Receiver → Parser の順に入力を閉じ、残りを処理して終了）");
-        await registry.CompleteAllAsync();
+        Log.Write("main", "CompleteAsync を Receiver → Parser の順に呼ぶ（入力を閉じ、残りを処理して終了）");
+        await receiver.CompleteAsync();   // 完了は上流から（下流の入力も CompleteAsync が閉じる）
+        await parser.CompleteAsync();
 
         Log.Write("main", $"結果: receiver={receiver.Execution?.Status} parser={parser.Execution?.Status} " +
                           $"解析={readings.Count} 件 [{string.Join(", ", readings.Select(Describe))}]");
@@ -143,13 +147,15 @@ internal static class Program
     private static async Task BackpressureAsync()
     {
         Log.Header("B. バックプレッシャー（Parser のキュー容量 1、解析 200ms、Receiver のキュー容量 2）");
-        var (registry, receiver, parser, readings) = Build(receiverCapacity: 2, parserCapacity: 1, parseTime: TimeSpan.FromMilliseconds(200));
-        registry.StartAll();
+        var (receiver, parser, readings) = Build(receiverCapacity: 2, parserCapacity: 1, parseTime: TimeSpan.FromMilliseconds(200));
+        parser.Start();   // 起動は下流から
+        receiver.Start();
 
         await SendAsync(receiver.Input, Enumerable.Range(1, 6).Select(i => $"N={i}\r\n"),
             (chunk, waited) => Log.Write("device", $"送信 \"{Show(chunk)}\" WriteAsync 待ち={waited}ms " +
                                                    $"(Receiver 待ち={receiver.PendingCount}, Parser 待ち={parser.PendingCount})"));
-        await registry.CompleteAllAsync();
+        await receiver.CompleteAsync();   // 完了は上流から（下流の入力も CompleteAsync が閉じる）
+        await parser.CompleteAsync();
 
         var values = readings.Select(r => (int)r.Value!.Value).ToArray();
         Log.Write("main", $"結果: 解析={values.Length}/6 件、順序保持={values.SequenceEqual(Enumerable.Range(1, 6))}、捨てたデータ=0");
@@ -158,35 +164,38 @@ internal static class Program
     /// <summary>C. キャンセル停止: 処理中のフレームは失われ得る。正常終了（A）と違い、残りは次の起動まで処理されない。</summary>
     private static async Task CancellationAsync()
     {
-        Log.Header("C. キャンセル停止（StopAllAsync）と、その後の正常終了");
-        var (registry, receiver, parser, readings) = Build(receiverCapacity: 8, parserCapacity: 8, parseTime: TimeSpan.FromMilliseconds(300));
-        registry.StartAll();
+        Log.Header("C. キャンセル停止（StopAsync）と、その後の正常終了");
+        var (receiver, parser, readings) = Build(receiverCapacity: 8, parserCapacity: 8, parseTime: TimeSpan.FromMilliseconds(300));
+        parser.Start();   // 起動は下流から
+        receiver.Start();
 
         await SendAsync(receiver.Input, ["C=1\r\nC=2\r\nC=3\r\nC=4\r\n"], TraceSend);
         await Task.Delay(450);
-        Log.Write("main", "StopAllAsync（キャンセルによる中断）");
-        await registry.StopAllAsync();
+        Log.Write("main", "StopAsync を Receiver → Parser の順に呼ぶ（キャンセルによる中断。入力は閉じない）");
+        await receiver.StopAsync();   // 停止は上流から（入力は閉じないので、後で再開できる）
+        await parser.StopAsync();
         Log.Write("main", $"停止後: receiver={receiver.Execution?.Status} parser={parser.Execution?.Status} " +
                           $"解析済み={readings.Count} 件、Parser に残った未処理={parser.PendingCount} 件");
 
-        Log.Write("main", "StartAll → CompleteAllAsync（残りを処理して正常終了）");
-        registry.StartAll();
-        await registry.CompleteAllAsync();
+        Log.Write("main", "Start（Parser → Receiver）→ CompleteAsync（Receiver → Parser）で残りを処理して正常終了");
+        parser.Start();   // 起動は下流から
+        receiver.Start();
+        await receiver.CompleteAsync();   // 完了は上流から（下流の入力も CompleteAsync が閉じる）
+        await parser.CompleteAsync();
         Log.Write("main", $"結果: parser={parser.Execution?.Status} 送信フレーム=4 件、解析={readings.Count} 件 " +
                           $"[{string.Join(", ", readings.Select(Describe))}]、停止で失われた={4 - readings.Count} 件");
     }
 
-    private static (EiiiWorkerRegistry Registry, ReceiverTask Receiver, ParserTask Parser, ConcurrentQueue<Reading> Readings) Build(
+    private static (ReceiverTask Receiver, ParserTask Parser, ConcurrentQueue<Reading> Readings) Build(
         int receiverCapacity, int parserCapacity, TimeSpan parseTime)
     {
         var readings = new ConcurrentQueue<Reading>();
-        var registry = new EiiiWorkerRegistry();   // 登録順 = 上流から下流（CompleteAllAsync の適用条件）
 
-        var receiver = registry.Add("receiver", new ReceiverTask(receiverCapacity, new DelimiterFramer(),
+        var receiver = new ReceiverTask(receiverCapacity, new DelimiterFramer(),
             new TaskToCallback<Frame>(frame => Log.Write("receiver",
-                $"フレーム確定 → Parser のキューが受理 \"{Show(frame.Text)}\"{(frame.IsComplete ? "" : "（未完了）")}"))));
+                $"フレーム確定 → Parser のキューが受理 \"{Show(frame.Text)}\"{(frame.IsComplete ? "" : "（未完了）")}")));
 
-        var parser = registry.Add("parser", new ParserTask(parserCapacity,
+        var parser = new ParserTask(parserCapacity,
             async (frame, ct) =>
             {
                 Log.Write("parser", $"解析開始 \"{Show(frame.Text)}\"");
@@ -204,10 +213,10 @@ internal static class Program
             {
                 readings.Enqueue(reading);
                 Log.Write("parser", $"解析結果 {Describe(reading)}");
-            })));
+            }));
 
         receiver.LinkTo(parser.Input);   // 接続はサンプル側で指定する。Parser のキューが満杯なら Receiver は WriteAsync で待つ
-        return (registry, receiver, parser, readings);
+        return (receiver, parser, readings);
     }
 
     private static void TraceSend(string chunk, long waited) => Log.Write("device", $"送信 \"{Show(chunk)}\" WriteAsync 待ち={waited}ms");

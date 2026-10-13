@@ -76,8 +76,8 @@ parser     稼働中            4/4 満杯     2       処理時間 1000ms
 | `S` | Parser の処理時間を 0 → 300 → 1000ms と切り替える | 解析が遅くなると Parser のキュー（容量 4）が埋まり、Receiver が Parser への出力で待つ | parser が「4/4 満杯」になり、receiver のキューが増える。`[受信]` の「到着→処理」が数百 ms に延びる |
 | `G` | OSD 応答の途中に 400ms の間欠を入れる（オン / オフ） | 無通信の閾値（250ms）を超えるため、1 つの応答が途中で確定してしまう | `[確定] [IdleTimeout] 150 文字` が 2 回出る |
 | `N` | 機器を無応答にする（オン / オフ） | 応答待ちの上限（通常 2 秒、OSD 6 秒）で NoResponse になり、直列化が解除される | `[確定] [NoResponse]`、`[通知] ... 応答なし` |
-| `R` | すべての Worker をキャンセルで停止し、再起動する | `StopAllAsync`（処理中のデータは失われ得る）→ `StartAll`。応答待ちは取り消される。キューに残っていた要求やチャンクは続きから処理される | `[待機] 停止により応答待ちを取り消した`、`[操作] 停止後: commander=停止(キャンセル) 残2 / ...` |
-| `Q` / `Esc` | 正常終了して終わる | `CompleteAllAsync`。上流から入力を閉じ、受理済みの要求をすべて処理してから、すべての Worker が終了する | parser のキューが 1 件ずつ減り、すべて「正常終了」になってから終わる |
+| `R` | すべての Worker をキャンセルで停止し、再起動する | 上流から 1 つずつ `StopAsync`（処理中のデータは失われ得る）→ 下流から `Start`。応答待ちは取り消される。キューに残っていた要求やチャンクは続きから処理される | `[待機] 停止により応答待ちを取り消した`、`[操作] 停止後: commander=停止(キャンセル) 残2 / ...` |
+| `Q` / `Esc` | 正常終了して終わる | 上流から 1 つずつ `CompleteAsync`。上流から入力を閉じ、受理済みの要求をすべて処理してから、すべての Worker が終了する | parser のキューが 1 件ずつ減り、すべて「正常終了」になってから終わる |
 
 標準入力をリダイレクトした場合は、文字をキーの代わりに読みます（`.` は 0.5 秒待つ）。例：`printf '1..2......q' | dotnet run --project samples/Eiii.DemoConsole`
 
@@ -102,7 +102,7 @@ flowchart LR
 - **直列化が解除される条件は、receiver が応答を確定したこと（CR / IdleTimeout）または NoResponse です。** parser の処理完了ではありません。そのため parser が遅くても、コマンドの送信は進みます。その結果、receiver が parser への出力で待たされ、チャンクが receiver のキューに溜まります（「到着→処理」が延びるのはこのためです）。
 - **receiver** は、commander が先に入れる `ExpectResponse` に従って、通常コマンドには `DelimiterFramer`（CR）、OSD には `TimeoutFramer`（無通信 250ms、応答待ち 6 秒）を使います。通常コマンドの応答待ちの上限（2 秒）も receiver が Tick で判定します。次の応答待ちを始めるときに前の応答の未確定データが残っていれば、捨てずに `Leftover` として出します。
 - **画面への表示**は、すべての Worker から `Channel<DemoEvent>` に送られ、描画ループ 1 本がコンソールへ書きます（複数のスレッドがコンソールを同時に触らない）。
-- **Registry**（`EiiiWorkerRegistry`）には commander → device → receiver → parser の順に登録しています。R と Q の一括操作はこの順序が前提です。
+- **起動・停止・完了の順序**は、`DemoSystem.Workers`（commander → device → receiver → parser）の並びに従い、このデモのコードで明示しています。R の停止と Q の完了は上流から 1 つずつ、起動は下流から行います。
 
 ---
 

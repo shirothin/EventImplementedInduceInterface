@@ -23,14 +23,14 @@ public class TimedPipelineTests
 
         public Pipeline(TimeoutOptions options, int parserCapacity = 4, Func<TimedFrame, CancellationToken, Task>? work = null)
         {
-            Receiver = Registry.Add("osd-receiver", new TimedReceiverTask(256, new TimeoutFramer(options)));
-            Parser = Registry.Add("osd-parser", new OsdParserTask(parserCapacity, work, Results.Enqueue));
+            Receiver = new TimedReceiverTask(256, new TimeoutFramer(options));
+            Parser = new OsdParserTask(parserCapacity, work, Results.Enqueue);
             Receiver.LinkTo(Parser.Input);
-            Registry.StartAll();
+            Parser.Start();   // 起動は下流から
+            Receiver.Start();
             ticks = TickSource.RunAsync(Receiver.Input, TimeSpan.FromMilliseconds(25), Time, ticking.Token);
         }
 
-        public EiiiWorkerRegistry Registry { get; } = new();
         public TimedReceiverTask Receiver { get; }
         public OsdParserTask Parser { get; }
         public ConcurrentQueue<OsdResponse> Results { get; } = new();
@@ -39,7 +39,8 @@ public class TimedPipelineTests
         {
             await ticking.CancelAsync();
             await ticks;
-            await Registry.CompleteAllAsync();
+            await Receiver.CompleteAsync();   // 完了は上流から 1 つずつ
+            await Parser.CompleteAsync();
             ticking.Dispose();
         }
     }

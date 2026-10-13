@@ -172,6 +172,35 @@ public class RegistryTests
     }
 
     [Fact]
+    public void GetAllは入出力型の異なるワーカーを登録順に返す()
+    {
+        var registry = new EiiiWorkerRegistry();
+        var times = registry.Add("times", new TestTask(4));
+        var length = registry.Add("length", new LengthTask(4));
+
+        Assert.Equal([times, length], registry.GetAll());
+    }
+
+    [Fact]
+    public void GetAllで取得した一覧は後からAddしても変わらない()
+    {
+        var registry = new EiiiWorkerRegistry();
+        var first = registry.Add("first", new TestTask(4));
+        var snapshot = registry.GetAll();
+
+        var second = registry.Add("second", new TestTask(4));
+
+        Assert.Equal([first], snapshot);                    // 取得済みの一覧は変わらない
+        Assert.Equal([first, second], registry.GetAll());   // 新しく取得すれば含まれる
+    }
+
+    [Fact]
+    public void 何も登録していなければGetAllは空の一覧を返す()
+    {
+        Assert.Empty(new EiiiWorkerRegistry().GetAll());
+    }
+
+    [Fact]
     public async Task CompleteAllAsyncの後にStartAllしても正常に完了したWorkerは再実行されない()
     {
         var registry = new EiiiWorkerRegistry();

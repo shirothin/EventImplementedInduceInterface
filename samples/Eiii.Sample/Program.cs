@@ -91,7 +91,7 @@ internal static class Test
         launcher.Requested += (sender, e) =>
             Log.Write("event", $"Requested を受信 sender={sender} Number={e.Value.Number} Accepted={e.Accepted}（呼び出し元スレッドで同期実行）");
 
-        registry.StartAll();
+        task.Start();   // 起動の順序はアプリケーションが決める（ワーカーは 1 つ）
         Log.Write("main", "Space: 要求1件 / B: 要求6件 / R: 再起動 / Esc: 正常終了");
 
         int number = 0, accepted = 0, rejected = 0;
@@ -116,8 +116,8 @@ internal static class Test
             Thread.Sleep(TimeSpan.FromSeconds(1));   // 原型 WaitForSeconds(1) の意図（原型は async void のため待てていなかった）
         }
 
-        Log.Write("main", "Esc: CompleteAllAsync（入力を閉じ、残りを処理して正常終了）");
-        registry.CompleteAllAsync().GetAwaiter().GetResult();
+        Log.Write("main", "Esc: CompleteAsync（入力を閉じ、残りを処理して正常終了）");
+        task.CompleteAsync().GetAwaiter().GetResult();
         consumer.GetAwaiter().GetResult();
         Log.Write("main", $"終了: 実行={task.Execution?.Status} 受理={accepted} 拒否={rejected} callback={callbacks} 下流で処理完了={displayed}"
                           + $" 停止で失われた={accepted - callbacks}");

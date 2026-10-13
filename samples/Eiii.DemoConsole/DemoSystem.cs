@@ -4,8 +4,9 @@ using Eiii.CommSim;
 namespace Eiii.DemoConsole;
 
 /// <summary>
-/// デモの構成（画面とは独立）。Launcher → Commander → 機器 → Receiver → Parser → Callback を組み立て、Registry に登録する。
-/// 接続と実行順序はここ（アプリケーション側）で決める。Eiii ライブラリ本体は通信の知識を持たない。
+/// デモの構成（画面とは独立）。Launcher → Commander → 機器 → Receiver → Parser → Callback を組み立てる。
+/// 接続と実行順序はここ（アプリケーション側）で決める。起動・停止・完了の順序は、このデモの直列の構成（<see cref="Workers"/>）に合わせて明示する。
+/// Eiii ライブラリ本体は通信の知識を持たない。
 /// </summary>
 public sealed class DemoSystem : IAsyncDisposable
 {
@@ -29,20 +30,11 @@ public sealed class DemoSystem : IAsyncDisposable
         Device = new FakeXPortDevice(options, Log);
         Commander = new CommanderWorker(options, Tracker, Receiver.Input, Log);
 
-        // 登録順 = 上流から下流（一括操作の適用条件）
-        Registry.Add("commander", Commander);
-        Registry.Add("device", Device);
-        Registry.Add("receiver", Receiver);
-        Registry.Add("parser", Parser);
-
         Commander.LinkTo(Device.Input);
         Device.LinkTo(Receiver.Input);
         Receiver.LinkTo(Parser.Input);
         Commander.Attach(Launcher);
     }
-
-    /// <summary>Worker の一元管理。</summary>
-    public EiiiWorkerRegistry Registry { get; } = new();
 
     /// <summary>要求を発行する入口（イベント経由で Commander の入力へ同期投入）。</summary>
     public EiiiLauncher<DemoCommand> Launcher { get; } = new();
@@ -80,7 +72,7 @@ public sealed class DemoSystem : IAsyncDisposable
     /// <summary>すべての Worker と Tick を起動する。</summary>
     public void Start()
     {
-        Registry.StartAll();
+        StartWorkers();
         ticks ??= TickSource.RunAsync(Receiver.Input, options.TickPeriod, options.Time, ticking.Token);
     }
 
@@ -102,11 +94,11 @@ public sealed class DemoSystem : IAsyncDisposable
     /// <returns>再起動が終わったときに完了する Task。</returns>
     public async Task RestartAsync()
     {
-        Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "R: StopAllAsync（キャンセル）→ StartAll。処理中のデータは失われ得る"));
-        await Registry.StopAllAsync();
+        Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "R: 上流から StopAsync（キャンセル）→ 下流から Start。処理中のデータは失われ得る"));
+        foreach (var (_, worker, _) in Workers) await worker.StopAsync();   // 停止は上流から 1 つずつ（入力は閉じない）
         Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control,
             $"停止後: " + string.Join(" / ", Workers.Select(w => $"{w.Name}={Describe(w.Worker)} 残{w.Worker.PendingCount}"))));
-        Registry.StartAll();
+        StartWorkers();
         Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "再起動した。キューに残っていた要求・チャンクは続きから処理される"));
     }
 
@@ -114,15 +106,22 @@ public sealed class DemoSystem : IAsyncDisposable
     /// <returns>終了したときに完了する Task。</returns>
     public async Task CompleteAsync()
     {
-        Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "Q: CompleteAllAsync（入力を閉じ、受理済みの要求をすべて処理して終了）"));
-        await Registry.CompleteAllAsync();
+        Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "Q: 上流から CompleteAsync（入力を閉じ、受理済みの要求をすべて処理して終了）"));
+        foreach (var (_, worker, _) in Workers) await worker.CompleteAsync();   // 完了は上流から 1 つずつ（下流の入力も CompleteAsync が閉じる）
         await StopTicksAsync();
         Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control,
             "終了: " + string.Join(" / ", Workers.Select(w => $"{w.Name}={Describe(w.Worker)}"))));
         events.Writer.TryComplete();
     }
 
-    /// <summary>画面表示用の Worker 一覧（上流から順）。</summary>
+    /// <summary>起動は下流から（上流の出力を受ける側を先に動かす）。このデモの直列の構成に固有の順序。</summary>
+    private void StartWorkers()
+    {
+        var workers = Workers;
+        for (int i = workers.Count - 1; i >= 0; i--) workers[i].Worker.Start();
+    }
+
+    /// <summary>画面表示用の Worker 一覧（上流から順）。起動・停止・完了の順序もこの並びに従う。</summary>
     public IReadOnlyList<(string Name, EiiiWorker Worker, int Capacity)> Workers =>
     [
         ("commander", Commander, options.CommanderCapacity),
