@@ -122,6 +122,10 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     /// コールバックは、出力が下流の Channel に受理されたこと（下流が未接続なら出力が生成されたこと）を示す。下流での処理の完了は保証しない。
     /// 下流もコールバックもない場合、出力はどこにも渡されない。
     /// </summary>
+    /// <remarks>
+    /// 接続先がある場合は、出力値の書き込みが完了してから callback を呼び出します。接続先に空きがない場合、書き込み可能になるまで非同期に待機することがあります。
+    /// 書き込みがキャンセルされた場合や接続先が閉じられている場合、callback は呼び出されません。
+    /// </remarks>
     /// <param name="value">出力する値。</param>
     /// <param name="cancellationToken">待機を取り消すトークン。通常は処理中のトークンを渡す。</param>
     /// <returns>書き込みとコールバックの完了を表す ValueTask。</returns>
