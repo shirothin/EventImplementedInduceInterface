@@ -20,7 +20,7 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     private readonly Channel<TIn> channel;
     private readonly TaskToCallback<TOut>? callback;
     private readonly EventHandler<object, EiiiEventArgs<TIn>> handler;
-    private volatile ChannelWriter<TOut>? downstream;
+    private Link? link;   // 一度だけ設定する。設定は Interlocked.CompareExchange、読み取りは Volatile.Read
 
     /// <summary>入力キューの容量と、出力を観測するコールバックを指定して初期化する。</summary>
     /// <param name="capacity">
@@ -49,15 +49,29 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     public override void CompleteInput() => channel.Writer.TryComplete();
 
     /// <summary>
-    /// 出力を下流の入力口へつなぐ。正常終了時は下流の入力も閉じる（完了の伝播）。
+    /// 出力を下流の入力口へつなぐ。接続は Worker の生存期間を通じて一度だけで、変更も解除もできない
+    /// （Canceled / Faulted から再起動しても接続は変わらない）。
     /// 下流を指定しない場合、<see cref="EmitAsync"/> の出力はコールバックだけに渡される。
     /// </summary>
+    /// <remarks>
+    /// <para>完了の伝播: 正常終了したときだけ、<paramref name="propagateCompletion"/> が true なら下流の入力を閉じる。
+    /// 停止（Canceled）と異常終了（Faulted）では伝播しない。複数の上流が同じ下流に接続する場合（合流）は false を指定し、
+    /// 下流の入力はすべての上流が終わった後に利用者が閉じる。</para>
+    /// <para>実行中の接続: <see cref="EmitAsync"/> は、呼び出し中に取得した接続状態を使う。接続を取得できなかった出力はコールバックにだけ渡される。
+    /// <see cref="LinkTo"/> と並行して行われた出力に接続が適用されるかは保証しない。確実に配送するには、出力を始める前（Start の前）に接続すること。</para>
+    /// </remarks>
     /// <param name="target">出力の書き込み先。通常は下流タスクの <see cref="Input"/>。</param>
-    public void LinkTo(ChannelWriter<TOut> target)
+    /// <param name="propagateCompletion">正常終了したときに下流の入力を閉じるなら true（既定）。</param>
+    /// <exception cref="InvalidOperationException">すでに接続している（同じ接続先を指定した場合も含む）。</exception>
+    public void LinkTo(ChannelWriter<TOut> target, bool propagateCompletion = true)
     {
         ArgumentNullException.ThrowIfNull(target);
-        downstream = target;
+        if (Interlocked.CompareExchange(ref link, new Link(target, propagateCompletion), null) is not null)
+            throw new InvalidOperationException("LinkTo は 1 つの Worker につき一度だけ呼べる（接続の変更や解除はできない）。");
     }
+
+    /// <summary>接続先と完了の伝播の指定。両方を 1 つのオブジェクトとして一度に設定し、読む側が片方だけを見ることがないようにする。</summary>
+    private sealed record Link(ChannelWriter<TOut> Target, bool PropagateCompletion);
 
     /// <summary>
     /// Launcher の要求イベントを購読する（原型 Subscribe）。同じ Launcher を重ねて購読しても 1 回分になる。
@@ -138,7 +152,7 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
     /// <returns>書き込みとコールバックの完了を表す ValueTask。</returns>
     protected async ValueTask EmitAsync(TOut value, CancellationToken cancellationToken)
     {
-        if (downstream is { } target) await target.WriteAsync(value, cancellationToken).ConfigureAwait(false);
+        if (Volatile.Read(ref link) is { } current) await current.Target.WriteAsync(value, cancellationToken).ConfigureAwait(false);
         callback?.Invoke(value);   // 明示的なデリゲート呼び出し（マルチキャストなら結合順にすべて呼ばれる）
     }
 
@@ -160,7 +174,7 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
                 }
             }
             await OnInputCompletedAsync(cancellationToken).ConfigureAwait(false);
-            downstream?.TryComplete();
+            if (Volatile.Read(ref link) is { PropagateCompletion: true } current) current.Target.TryComplete();   // 接続先と指定は同じ Link から読む
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
