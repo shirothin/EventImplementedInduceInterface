@@ -38,7 +38,7 @@ internal sealed class MyTask(int capacity, TimeSpan processingTime, TaskToCallba
 /// 標準入力がリダイレクトされているときは、文字（' ', 'b', 'r', 'q'）でキー操作の代わりにする。
 /// </summary>
 /// <remarks>
-/// <para>同期と非同期の違い: イベントハンドラー（Requested の購読者）は Request を呼んだスレッドで、Request が戻る前に同期実行される。
+/// <para>同期と非同期の違い: Request は呼んだスレッドで入力口へ TryWrite し、イベントハンドラー（Requested の購読者）も Request が戻る前に同期実行される。
 /// ワーカー（ProcessAsync）は Channel から要求を読み出して、呼び出し元とは独立に非同期で処理する。</para>
 /// <para>非同期は「別スレッド」と同じ意味ではない: async/await は待機中にスレッドを占有しない仕組みであり、
 /// 続きがどのスレッドで動くかは実行環境が決める。このサンプルでワーカーがスレッドプールで動くのは、
@@ -85,9 +85,9 @@ internal static class Test
 
         // Launcher — 原型はキー入力のたびに new EiiiLauncher で SetSubscribe していた。ここでは 1 つを常駐させる
         var launcher = new EiiiLauncher<MyItem>();
-        registry.Get<MyTask>("aTsk").Attach(launcher);   // 原型 GetTaskByName("aTsk")。ワーカーのハンドラーが TryWrite して Accepted を書き戻す
+        var attachment = launcher.Attach(registry.Get<MyTask>("aTsk").Input);   // 原型 GetTaskByName("aTsk")。Launcher が入力口へ TryWrite し、結果を Requested で通知する
 
-        // 観察用の購読者（Accepted は書き込まない）。マルチキャストなので登録順に、ワーカーのハンドラーの後で呼ばれる
+        // 観察用の購読者。投入の結果（Accepted、読み取り専用）が確定した後に呼ばれる
         launcher.Requested += (sender, e) =>
             Log.Write("event", $"Requested を受信 sender={sender} Number={e.Value.Number} Accepted={e.Accepted}（呼び出し元スレッドで同期実行）");
 
@@ -116,7 +116,8 @@ internal static class Test
             Thread.Sleep(TimeSpan.FromSeconds(1));   // 原型 WaitForSeconds(1) の意図（原型は async void のため待てていなかった）
         }
 
-        Log.Write("main", "Esc: CompleteAsync（入力を閉じ、残りを処理して正常終了）");
+        Log.Write("main", "Esc: 接続を外す（Launcher からの要求を止める）→ CompleteAsync（入力を閉じ、残りを処理して正常終了）");
+        attachment.Dispose();   // 接続の解除は、ワーカーの停止や入力の Close とは別の操作
         task.CompleteAsync().GetAwaiter().GetResult();
         consumer.GetAwaiter().GetResult();
         Log.Write("main", $"終了: 実行={task.Execution?.Status} 受理={accepted} 拒否={rejected} callback={callbacks} 下流で処理完了={displayed}"
@@ -127,7 +128,7 @@ internal static class Test
             for (int i = 0; i < count; i++)
             {
                 var item = new MyItem(++number, $"Item{number}");
-                var ok = launcher.Request(Caller, item);   // 同期: Requested イベント → ハンドラーが Channel へ TryWrite
+                var ok = launcher.Request(Caller, item);   // 同期: Launcher が Channel へ TryWrite → Requested イベントで結果を通知
                 if (ok) accepted++; else rejected++;
                 Log.Write("main", $"Request(Number={item.Number}) → {(ok ? "受理" : "拒否（満杯）")} pending={task.PendingCount}");
             }

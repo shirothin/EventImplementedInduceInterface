@@ -19,7 +19,6 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
 {
     private readonly Channel<TIn> channel;
     private readonly TaskToCallback<TOut>? callback;
-    private readonly EventHandler<object, EiiiEventArgs<TIn>> handler;
     private Link? link;   // 一度だけ設定する。設定は Interlocked.CompareExchange、読み取りは Volatile.Read
 
     /// <summary>入力キューの容量と、出力を観測するコールバックを指定して初期化する。</summary>
@@ -36,10 +35,12 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
             SingleReader = true,                      // 読み手はワーカー 1 本（Start が多重起動しないことで保証）
         });
         this.callback = callback;
-        handler = new EventHandler<object, EiiiEventArgs<TIn>>(OnEvent);   // 原型 Subscribe と同じく明示的にデリゲートを生成する
     }
 
-    /// <summary>入力口。<see cref="ChannelWriter{T}.TryWrite"/> または <see cref="ChannelWriter{T}.WriteAsync"/> で要求を投入する。</summary>
+    /// <summary>
+    /// 入力口。<see cref="ChannelWriter{T}.TryWrite"/> または <see cref="ChannelWriter{T}.WriteAsync"/> で要求を投入する。
+    /// <see cref="EiiiLauncher{T}.Attach"/> の接続先にもできる（要求する側に Worker を見せずに投入させる）。
+    /// </summary>
     public ChannelWriter<TIn> Input => channel.Writer;
 
     /// <inheritdoc/>
@@ -72,32 +73,6 @@ public abstract class EiiiWorker<TIn, TOut> : EiiiWorker
 
     /// <summary>接続先と完了の伝播の指定。両方を 1 つのオブジェクトとして一度に設定し、読む側が片方だけを見ることがないようにする。</summary>
     private sealed record Link(ChannelWriter<TOut> Target, bool PropagateCompletion);
-
-    /// <summary>
-    /// Launcher の要求イベントを購読する（原型 Subscribe）。同じ Launcher を重ねて購読しても 1 回分になる。
-    /// 制約: Launcher と Worker は 1 対 1 で使う。1 つの Launcher を複数の Worker が購読した場合の Accepted の競合（最後の書き込みが残る）は、初期版ではサポートしない。
-    /// </summary>
-    /// <param name="launcher">要求を発行する Launcher。</param>
-    public void Attach(ILauncher<TIn> launcher)
-    {
-        ArgumentNullException.ThrowIfNull(launcher);
-        launcher.Requested -= handler;   // 未登録なら何もしない。デリゲートは対象インスタンスとメソッドが同じなら等しい
-        launcher.Requested += handler;
-    }
-
-    /// <summary>Launcher の要求イベントの購読を解除する。</summary>
-    /// <param name="launcher">購読を解除する Launcher。</param>
-    public void Detach(ILauncher<TIn> launcher)
-    {
-        ArgumentNullException.ThrowIfNull(launcher);
-        launcher.Requested -= handler;
-    }
-
-    /// <summary>
-    /// 要求の到着通知を受け、入力キューへ同期投入する（原型 OnEvent。原型は処理そのものをここで実行していた）。
-    /// 呼び出し元のスレッドで実行され、処理はワーカーが後で行う。sender はキューに載せない。
-    /// </summary>
-    private void OnEvent(object sender, EiiiEventArgs<TIn> e) => e.Accepted = channel.Writer.TryWrite(e.Value);
 
     /// <summary>要求を 1 件処理する（原型 <c>eventFunc</c> に相当）。ワーカー上で 1 件ずつ呼ばれる。</summary>
     /// <remarks>

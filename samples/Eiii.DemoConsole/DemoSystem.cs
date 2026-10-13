@@ -13,6 +13,7 @@ public sealed class DemoSystem : IAsyncDisposable
     private readonly DemoOptions options;
     private readonly Channel<DemoEvent> events = Channel.CreateUnbounded<DemoEvent>(new UnboundedChannelOptions { SingleReader = true });
     private readonly CancellationTokenSource ticking = new();
+    private readonly IDisposable commanderAttachment;   // Launcher → Commander の接続。Q の正常終了と DisposeAsync で外す
     private Task? ticks;
     private int nextId;
     private int accepted;
@@ -33,10 +34,10 @@ public sealed class DemoSystem : IAsyncDisposable
         Commander.LinkTo(Device.Input);
         Device.LinkTo(Receiver.Input);
         Receiver.LinkTo(Parser.Input);
-        Commander.Attach(Launcher);
+        commanderAttachment = Launcher.Attach(Commander.Input);
     }
 
-    /// <summary>要求を発行する入口（イベント経由で Commander の入力へ同期投入）。</summary>
+    /// <summary>要求を発行する入口（Commander の入力へ同期投入し、結果を Requested で通知する）。</summary>
     public EiiiLauncher<DemoCommand> Launcher { get; } = new();
 
     /// <summary>コマンド直列化の応答待ち。</summary>
@@ -76,7 +77,7 @@ public sealed class DemoSystem : IAsyncDisposable
         ticks ??= TickSource.RunAsync(Receiver.Input, options.TickPeriod, options.Time, ticking.Token);
     }
 
-    /// <summary>コマンドを要求する。Launcher のイベントで Commander のキューへ同期投入され、満杯なら false。</summary>
+    /// <summary>コマンドを要求する。Launcher が Commander のキューへ同期投入し、満杯（または接続を外した後）なら false。</summary>
     /// <param name="kind">コマンドの種類。</param>
     /// <returns>受理されたら true。</returns>
     public bool Send(CommandKind kind)
@@ -106,7 +107,8 @@ public sealed class DemoSystem : IAsyncDisposable
     /// <returns>終了したときに完了する Task。</returns>
     public async Task CompleteAsync()
     {
-        Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "Q: 上流から CompleteAsync（入力を閉じ、受理済みの要求をすべて処理して終了）"));
+        Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control, "Q: Launcher の接続を外し、上流から CompleteAsync（入力を閉じ、受理済みの要求をすべて処理して終了）"));
+        commanderAttachment.Dispose();   // 先に新しい要求の受付を止めてから、Worker を終わらせる（Worker の停止や入力の Close はしない）
         foreach (var (_, worker, _) in Workers) await worker.CompleteAsync();   // 完了は上流から 1 つずつ（下流の入力も CompleteAsync が閉じる）
         await StopTicksAsync();
         Log(new DemoEvent(options.Time.GetUtcNow(), null, Stage.Control,
@@ -146,6 +148,7 @@ public sealed class DemoSystem : IAsyncDisposable
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
+        commanderAttachment.Dispose();   // Q を経ずに終わる場合にも接続を外す（二度目以降は何もしない）
         await StopTicksAsync();
         ticking.Dispose();
     }

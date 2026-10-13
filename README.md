@@ -47,8 +47,8 @@
 |---|---|
 | `EiiiWorker` | 入出力型に依存しない寿命制御。`Start` / `StopAsync` / `RestartAsync` / `CompleteInput`。状態は実際の Task（`Execution`）と `IsRunning` で観測する |
 | `EiiiWorker<TIn, TOut>` | 容量制限付きの `Channel<TIn>` を 1 本のワーカーが読み、`ProcessAsync` で 1 件ずつ処理し、`EmitAsync` で `TOut` を出力する |
-| `ILauncher<T>` / `EiiiLauncher<T>` | 呼び出し元の代理として要求のイベント `Requested` を発行し、受理されたかを bool で返す |
-| `EiiiEventArgs<T>` | 要求の値（`Value`）と、受信側が書き戻す受理結果（`Accepted`） |
+| `ILauncher<T>` / `EiiiLauncher<T>` | 呼び出し元の代理として、`Attach` した単一の接続先（Worker の `Input` など）へ要求を投入し、受理されたかを bool で返す。結果は `Requested` イベントでも通知する（観測用） |
+| `EiiiEventArgs<T>` | 要求の値（`Value`）と、投入で確定した受理結果（`Accepted`、読み取り専用） |
 | `EventHandler<TSender, TEventArgs>` | 原型から引き継いだ独自のデリゲート（比較学習のため維持） |
 | `TaskToCallback<TOut>` | 出力を観測するコールバック。Worker のスレッドで同期的に呼ばれる |
 | `EiiiWorkerRegistry` | 入出力型の異なる Worker を名前で登録・取得し、登録順に列挙する（起動・停止・完了の順序は利用者が決める） |
@@ -68,8 +68,8 @@ sequenceDiagram
     rect rgba(100,150,255,0.12)
     Note over C,Q: 呼び出し元のスレッド（同期）
     C->>L: Request(sender, value)
-    L->>Q: Requested イベント → 購読ハンドラーが TryWrite
-    L-->>C: true（受理）/ false（満杯・入力完了・購読者なし）
+    L->>Q: Attach した接続先へ TryWrite（その後 Requested イベントで結果を通知）
+    L-->>C: true（受理）/ false（満杯・入力完了・未接続）
     end
 
     rect rgba(80,200,120,0.12)
@@ -97,7 +97,7 @@ using Eiii;
 
 var worker = new TimesTen(capacity: 8, callback: new TaskToCallback<int>(v => Console.WriteLine(v)));
 var launcher = new EiiiLauncher<int>();
-worker.Attach(launcher);              // イベントを購読（Launcher と Worker は 1 対 1）
+using var attachment = launcher.Attach(worker.Input);   // 接続先は 1 つ。Dispose で接続を外す（Worker は止めない）
 worker.Start();
 
 bool accepted = launcher.Request(sender: "main", value: 1);   // 同期: 受理されたかがすぐ返る
@@ -170,7 +170,7 @@ dotnet test Eiii.slnx -c Release
 仕様として受け入れている制限です（解消のための機能は追加していません）。
 
 - `StopAsync`（キャンセル）では処理中の 1 件が失われ得ます。1 件から複数の出力を作る途中だった場合は、まだ渡していない出力も失われます。
-- Launcher と Worker は 1 対 1 です。`Request` は待たず、満杯なら false を返します（再送は呼び出し元の判断）。
+- Launcher の接続先は同時に 1 つです（外した後は接続し直せます）。`Request` は待たず、満杯なら false を返します（再送は呼び出し元の判断）。購読者が例外を投げても、要求はすでに受理されていることがあります。
 - コールバックは「出力が下流の Channel に受理されたこと」を示し、下流での処理完了は保証しません。
 - ワーカーの中から自分の `StopAsync` / `RestartAsync` を await すると止まります（禁止事項。検出はしません）。
 - 容量 0 の Channel は、バッファを持たない受け渡しになります（.NET 10 の `BoundedChannel` の仕様）。
